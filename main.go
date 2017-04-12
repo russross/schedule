@@ -17,16 +17,16 @@ import (
 
 type Instructor struct {
 	Name    string
-	Times   map[*Time]int
+	Times   map[*Time]Badness
 	Courses []*Course
 }
 
 type Course struct {
 	Name       string
 	Instructor *Instructor
-	Rooms      map[*Room]int
-	Times      map[*Time]int
-	Conflicts  map[*Course]int
+	Rooms      map[*Room]Badness
+	Times      map[*Time]Badness
+	Conflicts  map[*Course]Badness
 	TwoSlots   bool
 	PinRoom    *Room
 	PinTime    *Time
@@ -45,8 +45,15 @@ type Time struct {
 	Position int
 }
 
+type Badness struct {
+	N       int
+	Message string
+}
+
+var impossible = Badness{N: -1, Message: ""}
+
 type Conflict struct {
-	Badness int
+	Badness Badness
 	Courses []*Course
 }
 
@@ -63,7 +70,7 @@ type DataSet struct {
 type RoomTimeBadness struct {
 	Room    *Room
 	Time    *Time
-	Badness int
+	Badness Badness
 }
 
 type Section struct {
@@ -90,16 +97,16 @@ type RoomTime struct {
 type SearchState struct {
 	Data                  *DataSet
 	Sections              []*Section
-	InstructorTimeBadness map[InstructorTime]int
-	CourseTimeBadness     map[CourseTime]int
-	IsRoomTimeTaken       map[RoomTime]bool
+	InstructorTimeBadness map[InstructorTime]Badness
+	CourseTimeBadness     map[CourseTime]Badness
+	RoomTimeBadness       map[RoomTime]Badness
 }
 
 type CoursePlacement struct {
 	Course  *Course
 	Room    *Room
 	Time    *Time
-	Badness int
+	Badness Badness
 }
 
 type SearchResult struct {
@@ -110,16 +117,23 @@ type SearchResult struct {
 func NewSearchState(data *DataSet) *SearchState {
 	state := &SearchState{
 		Data: data,
-		InstructorTimeBadness: make(map[InstructorTime]int),
-		CourseTimeBadness:     make(map[CourseTime]int),
-		IsRoomTimeTaken:       make(map[RoomTime]bool),
+		InstructorTimeBadness: make(map[InstructorTime]Badness),
+		CourseTimeBadness:     make(map[CourseTime]Badness),
+		RoomTimeBadness:       make(map[RoomTime]Badness),
+	}
+
+	// fill in RoomTimeBadness
+	for _, room := range data.Rooms {
+		for _, time := range data.Times {
+			state.RoomTimeBadness[RoomTime{room, time}] = Badness{0, ""}
+		}
 	}
 
 	// fill in InstructorTimeBadness
 	for _, instructor := range data.Instructors {
 		// start with impossible then correct it for available slots
 		for _, time := range data.Times {
-			state.InstructorTimeBadness[InstructorTime{instructor, time}] = -1
+			state.InstructorTimeBadness[InstructorTime{instructor, time}] = impossible
 		}
 		for time, badness := range instructor.Times {
 			state.InstructorTimeBadness[InstructorTime{instructor, time}] = badness
@@ -130,7 +144,7 @@ func NewSearchState(data *DataSet) *SearchState {
 		for _, course := range instructor.Courses {
 			// start with impossible, correct it for available slots later (see below)
 			for _, time := range data.Times {
-				state.CourseTimeBadness[CourseTime{course, time}] = -1
+				state.CourseTimeBadness[CourseTime{course, time}] = impossible
 			}
 
 			// record available room/time pairs for this course
@@ -150,7 +164,7 @@ func NewSearchState(data *DataSet) *SearchState {
 
 					courseTimeBadness, present := course.Times[time]
 					if !present {
-						courseTimeBadness = -1
+						courseTimeBadness = impossible
 					}
 
 					// if no course times specified, just use instructor times
@@ -161,11 +175,11 @@ func NewSearchState(data *DataSet) *SearchState {
 					// if course requires two time slots, make sure this time has a
 					// following slot
 					if course.TwoSlots && time.Next == nil {
-						courseTimeBadness = -1
+						courseTimeBadness = impossible
 					}
 
 					badness := worst(roomBadness, courseTimeBadness, instructorTimeBadness)
-					if badness < 0 {
+					if badness.N < 0 {
 						continue
 					}
 
@@ -204,9 +218,9 @@ func NewSearchState(data *DataSet) *SearchState {
 func (state *SearchState) Clone() *SearchState {
 	new := &SearchState{
 		Data: state.Data,
-		InstructorTimeBadness: make(map[InstructorTime]int),
-		CourseTimeBadness:     make(map[CourseTime]int),
-		IsRoomTimeTaken:       make(map[RoomTime]bool),
+		InstructorTimeBadness: make(map[InstructorTime]Badness),
+		CourseTimeBadness:     make(map[CourseTime]Badness),
+		RoomTimeBadness:       make(map[RoomTime]Badness),
 	}
 
 	for _, elt := range state.Sections {
@@ -218,19 +232,19 @@ func (state *SearchState) Clone() *SearchState {
 	for k, v := range state.CourseTimeBadness {
 		new.CourseTimeBadness[k] = v
 	}
-	for k, v := range state.IsRoomTimeTaken {
-		new.IsRoomTimeTaken[k] = v
+	for k, v := range state.RoomTimeBadness {
+		new.RoomTimeBadness[k] = v
 	}
 	return new
 }
 
-func worst(lst ...int) int {
-	bad := -1
+func worst(lst ...Badness) Badness {
+	bad := impossible
 	for i, n := range lst {
-		if n < 0 || n >= 100 {
-			return -1
+		if n.N < 0 || n.N >= 100 {
+			return impossible
 		}
-		if i == 0 || n > bad {
+		if i == 0 || n.N > bad.N {
 			bad = n
 		}
 	}
@@ -240,17 +254,18 @@ func worst(lst ...int) int {
 func (state *SearchState) CollectRoomTimeOptions(section *Section) []RoomTimeBadness {
 	var lst []RoomTimeBadness
 	for _, rtb := range section.RoomTimeOptions {
-		if state.IsRoomTimeTaken[RoomTime{rtb.Room, rtb.Time}] {
+		if badness := state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}]; badness.N < 0 {
 			continue
 		}
-		if section.Course.TwoSlots &&
-			state.IsRoomTimeTaken[RoomTime{rtb.Room, rtb.Time.Next}] {
-			continue
+		if section.Course.TwoSlots {
+			if badness := state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time.Next}]; badness.N < 0 {
+				continue
+			}
 		}
 
 		instructorBadness := state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}]
 		courseBadness := state.CourseTimeBadness[CourseTime{section.Course, rtb.Time}]
-		if badness := worst(rtb.Badness, instructorBadness, courseBadness); badness >= 0 {
+		if badness := worst(rtb.Badness, instructorBadness, courseBadness); badness.N >= 0 {
 			lst = append(lst, RoomTimeBadness{
 				Room:    rtb.Room,
 				Time:    rtb.Time,
@@ -398,6 +413,7 @@ func main() {
 				state := pristine.Clone()
 				result := new(SearchResult)
 				state.Solve(0, result)
+				Complain(state.Data, result)
 				results <- result
 			}
 		}()
@@ -425,9 +441,6 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 	options := state.CollectRoomTimeOptions(section)
 	if len(options) == 0 {
 		// failure
-		//log.Printf("failed to place %s => %s",
-		//	state.nToInstructor[section.InstructorN].Name,
-		//	state.nToCourse[section.CourseN].Name)
 		result.Badness = -1
 		return
 	}
@@ -435,12 +448,12 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 	// run a lottery to pick the next choice
 	tickets := 0
 	for _, elt := range options {
-		tickets += 100 - elt.Badness
+		tickets += 100 - elt.Badness.N
 	}
 	winner := rand.Intn(tickets)
 	var rtb RoomTimeBadness
 	for _, elt := range options {
-		winner -= 100 - elt.Badness
+		winner -= 100 - elt.Badness.N
 		if winner < 0 {
 			rtb = elt
 			break
@@ -448,11 +461,11 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 	}
 
 	// place the next section
-	state.IsRoomTimeTaken[RoomTime{rtb.Room, rtb.Time}] = true
-	state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}] = -1
+	state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}] = impossible
+	state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}] = impossible
 	if section.Course.TwoSlots {
-		state.IsRoomTimeTaken[RoomTime{rtb.Room, rtb.Time.Next}] = true
-		state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time.Next}] = -1
+		state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time.Next}] = impossible
+		state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time.Next}] = impossible
 	}
 	for other, badness := range section.Course.Conflicts {
 		old := state.CourseTimeBadness[CourseTime{other, rtb.Time}]
@@ -470,7 +483,7 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 		Time:    rtb.Time,
 		Badness: rtb.Badness,
 	}
-	result.Badness += rtb.Badness
+	result.Badness += rtb.Badness.N
 	result.Schedule = append(result.Schedule, assignment)
 	state.Solve(head+1, result)
 }
@@ -484,4 +497,38 @@ func round(d time.Duration, nearest time.Duration) time.Duration {
 		return d - r + nearest
 	}
 	return d - r
+}
+
+func Complain(data *DataSet, result *SearchResult) {
+	if result.Badness < 0 {
+		return
+	}
+
+	// penalize instructors with spread out schedules on a given day
+	instructorToPlacements := make(map[*Instructor][]*CoursePlacement)
+	for _, elt := range result.Schedule {
+		lst := instructorToPlacements[elt.Course.Instructor]
+		instructorToPlacements[elt.Course.Instructor] = append(lst, elt)
+	}
+
+	for _, placements := range instructorToPlacements {
+		sort.Slice(placements, func(a, b int) bool {
+			return placements[a].Time.Position < placements[b].Time.Position
+		})
+
+		for i, a := range placements[:len(placements)-1] {
+			b := placements[i+1]
+			aBreak := strings.IndexAny(a.Time.Name, "0123456789")
+			bBreak := strings.IndexAny(b.Time.Name, "0123456789")
+			if aBreak < 1 || bBreak < 1 || a.Time.Name[:aBreak] != b.Time.Name[:bBreak] {
+				continue
+			}
+
+			gap := b.Time.Position - a.Time.Position
+			if gap < 2 {
+				continue
+			}
+			result.Badness += gap * gap
+		}
+	}
 }

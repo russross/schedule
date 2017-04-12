@@ -179,22 +179,23 @@ func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
 	}
 	instructor := &Instructor{
 		Name:  fields[1],
-		Times: make(map[*Time]int),
+		Times: make(map[*Time]Badness),
 	}
 	data.Instructors[instructor.Name] = instructor
 
 	// parse available times
 	for _, rawTag := range fields[2:] {
-		tag, badness, err := parseBadness(rawTag)
+		tag, n, err := parseBadness(rawTag)
 		if err != nil {
 			log.Printf("when parsing times for instructor %s", instructor.Name)
 			log.Printf("expected time of form %q but found %q", "time:badness", tag)
 			return nil, err
 		}
+		badness := Badness{n, "instructor preferrence"}
 
 		hits := 0
 		if time, present := data.Times[tag]; present {
-			if badness2, present := instructor.Times[time]; present && badness2 > badness {
+			if badness2, present := instructor.Times[time]; present && badness2.N > badness.N {
 				instructor.Times[time] = badness2
 			} else {
 				instructor.Times[time] = badness
@@ -203,7 +204,7 @@ func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
 		}
 		if times, present := data.TagToTimes[tag]; present {
 			for _, time := range times {
-				if badness2, present := instructor.Times[time]; present && badness2 > badness {
+				if badness2, present := instructor.Times[time]; present && badness2.N > badness.N {
 					instructor.Times[time] = badness2
 				} else {
 					instructor.Times[time] = badness
@@ -239,9 +240,9 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 	course := &Course{
 		Name:       fields[1],
 		Instructor: instructor,
-		Rooms:      make(map[*Room]int),
-		Times:      make(map[*Time]int),
-		Conflicts:  make(map[*Course]int),
+		Rooms:      make(map[*Room]Badness),
+		Times:      make(map[*Time]Badness),
+		Conflicts:  make(map[*Course]Badness),
 	}
 	instructor.Courses = append(instructor.Courses, course)
 
@@ -279,14 +280,15 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 		}
 
 		// handle tags
-		tag, badness, err := parseBadness(rawTag)
+		tag, n, err := parseBadness(rawTag)
 		if err != nil {
 			return nil, err
 		}
+		badness := Badness{n, "course preference"}
 
 		hits := 0
 		if room, present := data.Rooms[tag]; present {
-			if badness2, present := course.Rooms[room]; present && badness2 > badness {
+			if badness2, present := course.Rooms[room]; present && badness2.N > badness.N {
 				course.Rooms[room] = badness2
 			} else {
 				course.Rooms[room] = badness
@@ -294,7 +296,7 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 			hits++
 		}
 		if time, present := data.Times[tag]; present {
-			if badness2, present := course.Times[time]; present && badness2 > badness {
+			if badness2, present := course.Times[time]; present && badness2.N > badness.N {
 				course.Times[time] = badness2
 			} else {
 				course.Times[time] = badness
@@ -303,7 +305,7 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 		}
 		if rooms, present := data.TagToRooms[tag]; present {
 			for _, room := range rooms {
-				if badness2, present := course.Rooms[room]; present && badness2 > badness {
+				if badness2, present := course.Rooms[room]; present && badness2.N > badness.N {
 					course.Rooms[room] = badness2
 				} else {
 					course.Rooms[room] = badness
@@ -313,7 +315,7 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 		}
 		if times, present := data.TagToTimes[tag]; present {
 			for _, time := range times {
-				if badness2, present := course.Times[time]; present && badness2 > badness {
+				if badness2, present := course.Times[time]; present && badness2.N > badness.N {
 					course.Times[time] = badness2
 				} else {
 					course.Times[time] = badness
@@ -343,12 +345,12 @@ func (data *DataSet) ParseConflict(fields []string) error {
 		return fmt.Errorf("parsing error")
 	}
 
-	badness, err := strconv.Atoi(fields[1])
+	n, err := strconv.Atoi(fields[1])
 	if err != nil {
 		return fmt.Errorf("error parsing badness value %q", fields[1])
 	}
-	if badness < 0 || badness >= 100 {
-		badness = -1
+	if n < 0 || n >= 100 {
+		n = -1
 	}
 
 	var courses []*Course
@@ -371,6 +373,11 @@ func (data *DataSet) ParseConflict(fields []string) error {
 			return fmt.Errorf("course %q not found in conflict: line", tag)
 		}
 	}
+	s := "conflict:"
+	for _, course := range courses {
+		s += " " + course.Name
+	}
+	badness := Badness{n, s}
 
 	for _, course := range courses {
 		for _, elt := range courses {
@@ -378,7 +385,7 @@ func (data *DataSet) ParseConflict(fields []string) error {
 				continue
 			}
 
-			if badness2, present := course.Conflicts[elt]; present && badness2 > badness {
+			if badness2, present := course.Conflicts[elt]; present && badness2.N > badness.N {
 				course.Conflicts[elt] = badness2
 			} else {
 				course.Conflicts[elt] = badness
@@ -445,7 +452,7 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	fmt.Fprintf(w, "<title>Schedule of rooms by time</title>\n")
 	fmt.Fprintf(w, "<style>\n")
 	fmt.Fprintf(w, "  table, td { border: 1px solid darkgray; }\n")
-	fmt.Fprintf(w, "  span { cursor: pointer; }\n")
+	fmt.Fprintf(w, "  span, b { cursor: pointer; }\n")
 	fmt.Fprintf(w, "</style>\n")
 	fmt.Fprintf(w, "</head>\n")
 	fmt.Fprintf(w, "<body>\n")
@@ -466,11 +473,12 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 			placement := byRoomTime[room.Name+":"+time.Name]
 			if placement == nil {
 				fmt.Fprintf(w, "    <td>&nbsp</td>\n")
-			} else if placement.Badness > 0 {
-				fmt.Fprintf(w, "    <td>%s<br>%s<br><b>badness score %d</b></td>\n",
+			} else if placement.Badness.N > 0 {
+				fmt.Fprintf(w, "    <td>%s<br>%s<br><b title=\"%s\">badness %d</b></td>\n",
 					html.EscapeString(placement.Course.Instructor.Name),
 					html.EscapeString(placement.Course.Name),
-					placement.Badness)
+					html.EscapeString(placement.Badness.Message),
+					placement.Badness.N)
 			} else {
 				fmt.Fprintf(w, "    <td>%s<br>%s</td>\n",
 					html.EscapeString(placement.Course.Instructor.Name),
@@ -488,16 +496,17 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
         var tds = document.getElementsByTagName('td');
         for (var i = 0; i < tds.length; i++) {
             var parts = tds[i].innerHTML.split('<br>');
-            for (var j = 0; j < parts.length && j < 2; j++) {
-                if (parts[j] == '&nbsp;') continue;
-                if (!numbers.hasOwnProperty(parts[j])) {
-                    numbers[parts[j]] = next;
-                    next++;
-                }
-                var n = numbers[parts[j]];
-                parts[j] = '<span class="number' + n + '">' + parts[j] + '</span>';
-            }
-            tds[i].innerHTML = parts.join('<br>');
+			if (parts.length > 1) {
+				for (var j = 0; j < parts.length && j < 2; j++) {
+					if (!numbers.hasOwnProperty(parts[j])) {
+						numbers[parts[j]] = next;
+						next++;
+					}
+					var n = numbers[parts[j]];
+					parts[j] = '<span class="number' + n + '">' + parts[j] + '</span>';
+				}
+				tds[i].innerHTML = parts.join('<br>');
+			}
         }
         var spans = document.getElementsByTagName('span');
         for (var i = 0; i < spans.length; i++) {
@@ -596,9 +605,9 @@ func writeCSV(out io.Writer, data *DataSet, result *SearchResult) {
 
 			// is the course pinned?
 			if placement, present := courseToPlacement[course]; present {
-				if placement.Badness > 0 {
-					msg := fmt.Sprintf("// placing %s here added %d to the badness score",
-						course.Name, placement.Badness)
+				if placement.Badness.N > 0 {
+					msg := fmt.Sprintf("// placing %s here added %d to the badness score: %s",
+						course.Name, placement.Badness.N, placement.Badness.Message)
 					rows = append(rows, []string{msg})
 				}
 				row = append(row, fmt.Sprintf("pin(%s,%s)", placement.Room.Name, placement.Time.Name))
@@ -616,7 +625,7 @@ func writeCSV(out io.Writer, data *DataSet, result *SearchResult) {
 	rows = append(rows, []string{"// conflicts"})
 	for _, conflict := range data.Conflicts {
 		used := make(map[string]bool)
-		row := []string{"conflict:", fmt.Sprintf("%d", conflict.Badness)}
+		row := []string{"conflict:", fmt.Sprintf("%d", conflict.Badness.N)}
 		for _, course := range conflict.Courses {
 			if used[course.Name] {
 				continue
@@ -649,8 +658,8 @@ func writeCSV(out io.Writer, data *DataSet, result *SearchResult) {
 	}
 }
 
-func contractRooms(in map[*Room]int, data *DataSet) []string {
-	available := make(map[*Room]int)
+func contractRooms(in map[*Room]Badness, data *DataSet) []string {
+	available := make(map[*Room]Badness)
 	for k, v := range in {
 		available[k] = v
 	}
@@ -667,22 +676,22 @@ func contractRooms(in map[*Room]int, data *DataSet) []string {
 tagloop:
 	for _, tag := range tags {
 		rooms := data.TagToRooms[tag]
-		badness := -1
+		n := -1
 		for i, room := range rooms {
-			badness2, present := available[room]
+			badness, present := available[room]
 			if !present {
 				continue tagloop
 			}
 			if i == 0 {
-				badness = badness2
+				n = badness.N
 			}
-			if badness != badness2 {
+			if n != badness.N {
 				continue tagloop
 			}
 		}
 
 		// a full matching set
-		out = append(out, joinTagBadness(tag, badness))
+		out = append(out, joinTagBadness(tag, n))
 
 		for _, room := range rooms {
 			delete(available, room)
@@ -698,14 +707,14 @@ tagloop:
 		return otherRooms[a].Position < otherRooms[b].Position
 	})
 	for _, room := range otherRooms {
-		out = append(out, joinTagBadness(room.Name, available[room]))
+		out = append(out, joinTagBadness(room.Name, available[room].N))
 	}
 
 	return out
 }
 
-func contractTimes(in map[*Time]int, data *DataSet) []string {
-	available := make(map[*Time]int)
+func contractTimes(in map[*Time]Badness, data *DataSet) []string {
+	available := make(map[*Time]Badness)
 	for k, v := range in {
 		available[k] = v
 	}
@@ -713,22 +722,22 @@ func contractTimes(in map[*Time]int, data *DataSet) []string {
 
 tagloop:
 	for tag, times := range data.TagToTimes {
-		badness := -1
+		n := -1
 		for i, time := range times {
-			badness2, present := available[time]
+			badness, present := available[time]
 			if !present {
 				continue tagloop
 			}
 			if i == 0 {
-				badness = badness2
+				n = badness.N
 			}
-			if badness != badness2 {
+			if n != badness.N {
 				continue tagloop
 			}
 		}
 
 		// a full matching set
-		out = append(out, joinTagBadness(tag, badness))
+		out = append(out, joinTagBadness(tag, n))
 
 		for _, time := range times {
 			delete(available, time)
@@ -744,7 +753,7 @@ tagloop:
 		return otherTimes[a].Position < otherTimes[b].Position
 	})
 	for _, time := range otherTimes {
-		out = append(out, joinTagBadness(time.Name, available[time]))
+		out = append(out, joinTagBadness(time.Name, available[time].N))
 	}
 
 	return out
