@@ -459,7 +459,7 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	fmt.Fprintf(w, "<table>\n")
 	fmt.Fprintf(w, "<thead>\n")
 	fmt.Fprintf(w, "  <tr>\n")
-	fmt.Fprintf(w, "    <td>score: %d</td>\n", results.Badness)
+	fmt.Fprintf(w, "    <td>badness %d</td>\n", results.Badness)
 	for _, room := range rooms {
 		fmt.Fprintf(w, "    <td>%s</td>\n", html.EscapeString(room.Name))
 	}
