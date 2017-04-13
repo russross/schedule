@@ -307,7 +307,7 @@ func main() {
 
 	flag.IntVar(&workers, "workers", workers, "number of concurrent workers")
 	flag.IntVar(&pin, "pin", pin, "percent chance that a pin will be honored")
-	flag.DurationVar(&dur, "time", dur, "time to spend searching")
+	flag.DurationVar(&dur, "time", dur, "total time to spend searching")
 	flag.StringVar(&infile, "in", infile, "input file name")
 	flag.StringVar(&outPrefix, "out", outPrefix, "output file prefix (.csv and .html suffixes)")
 	flag.Parse()
@@ -362,11 +362,9 @@ func main() {
 			if count == 0 || result.Badness < best.Badness {
 				log.Printf("new best score with badness %d", result.Badness)
 				best = result
-				if pin > 0 && pin < 100 {
-					mutex.Lock()
-					rePin(data, best)
-					mutex.Unlock()
-				}
+				mutex.Lock()
+				rePin(data, best)
+				mutex.Unlock()
 				fp, err := os.Create(outPrefix + ".html")
 				if err != nil {
 					log.Fatalf("%v", err)
@@ -397,7 +395,7 @@ func main() {
 		resultsFinished <- struct{}{}
 	}()
 
-	if pin > 0 && pin < 100 {
+	{
 		// pin at 100% to establish a baseline
 		mutex.Lock()
 		state := pristine.Clone()

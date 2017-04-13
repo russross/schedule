@@ -496,17 +496,17 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
         var tds = document.getElementsByTagName('td');
         for (var i = 0; i < tds.length; i++) {
             var parts = tds[i].innerHTML.split('<br>');
-			if (parts.length > 1) {
-				for (var j = 0; j < parts.length && j < 2; j++) {
-					if (!numbers.hasOwnProperty(parts[j])) {
-						numbers[parts[j]] = next;
-						next++;
-					}
-					var n = numbers[parts[j]];
-					parts[j] = '<span class="number' + n + '">' + parts[j] + '</span>';
-				}
-				tds[i].innerHTML = parts.join('<br>');
-			}
+            if (parts.length > 1) {
+                for (var j = 0; j < parts.length && j < 2; j++) {
+                    if (!numbers.hasOwnProperty(parts[j])) {
+                        numbers[parts[j]] = next;
+                        next++;
+                    }
+                    var n = numbers[parts[j]];
+                    parts[j] = '<span class="number' + n + '">' + parts[j] + '</span>';
+                }
+                tds[i].innerHTML = parts.join('<br>');
+            }
         }
         var spans = document.getElementsByTagName('span');
         for (var i = 0; i < spans.length; i++) {
