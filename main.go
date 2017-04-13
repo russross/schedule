@@ -272,7 +272,13 @@ func (state *SearchState) CollectRoomTimeOptions(section *Section) []RoomTimeBad
 func (state *SearchState) SortSections(sections []*Section) {
 	options := make(map[*Section]int)
 	for _, section := range sections {
-		options[section] = len(state.CollectRoomTimeOptions(section))
+		tickets := 0
+		for _, rtb := range state.CollectRoomTimeOptions(section) {
+			if rtb.Badness.N >= 0 {
+				tickets += 100 - rtb.Badness.N
+			}
+		}
+		options[section] = tickets
 	}
 	sort.Slice(sections, func(a, b int) bool {
 		return options[sections[a]] < options[sections[b]]
@@ -295,18 +301,21 @@ func (state *SearchState) PrintSections() {
 	}
 }
 
+var reSort = 15
+
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	log.SetFlags(log.Ltime)
 
 	workers := runtime.NumCPU()
 	dur := 10 * time.Second
-	pin := 100
+	pin := 0
 	infile := "input.csv"
 	outPrefix := "schedule"
 
 	flag.IntVar(&workers, "workers", workers, "number of concurrent workers")
 	flag.IntVar(&pin, "pin", pin, "percent chance that a pin will be honored")
+	flag.IntVar(&reSort, "sort", reSort, "how often to re-sort sections to be placed")
 	flag.DurationVar(&dur, "time", dur, "total time to spend searching")
 	flag.StringVar(&infile, "in", infile, "input file name")
 	flag.StringVar(&outPrefix, "out", outPrefix, "output file prefix (.csv and .html suffixes)")
@@ -342,7 +351,7 @@ func main() {
 	pristine := NewSearchState(data, pin)
 	var mutex sync.RWMutex
 
-	log.Printf("searching for %v", dur)
+	log.Printf("searching for %v with pins honored at %d%%", dur, pin)
 	start := time.Now()
 
 	// one goroutine gathers results
@@ -388,10 +397,9 @@ func main() {
 		}
 
 		if count > 0 {
-			log.Printf("best score was %d, average was %d", best.Badness, total/count)
+			log.Printf("best score was %d", best.Badness)
 		}
 		log.Printf("%d successful runs out of %d attempts in %v", count, attempts, round(time.Since(start), time.Second))
-		log.Printf("average time per attempt: %v", round(time.Since(start)/time.Duration(attempts), time.Microsecond))
 		resultsFinished <- struct{}{}
 	}()
 
@@ -438,7 +446,7 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 	}
 
 	// sort remaining sections by number of options
-	if head%15 == 0 {
+	if head%reSort == 0 {
 		state.SortSections(state.Sections[head:])
 	}
 

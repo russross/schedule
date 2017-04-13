@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (data *DataSet) Parse(filename string) error {
@@ -459,7 +460,7 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	fmt.Fprintf(w, "<table>\n")
 	fmt.Fprintf(w, "<thead>\n")
 	fmt.Fprintf(w, "  <tr>\n")
-	fmt.Fprintf(w, "    <td>badness %d</td>\n", results.Badness)
+	fmt.Fprintf(w, "    <td>&nbsp;</td>\n")
 	for _, room := range rooms {
 		fmt.Fprintf(w, "    <td>%s</td>\n", html.EscapeString(room.Name))
 	}
@@ -489,6 +490,7 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	}
 	fmt.Fprintf(w, "</tbody>\n")
 	fmt.Fprintf(w, "</table>\n")
+	fmt.Fprintf(w, "<p>Schedule generated %s with badness %d</p>", time.Now().Format("Jan _2, 2006 at 3:04 PM"), results.Badness)
 	fmt.Fprintf(w, `<script>
     (function () {
         var numbers = {};
