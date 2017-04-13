@@ -339,6 +339,8 @@ func main() {
 	if err := data.Parse(infile); err != nil {
 		log.Fatalf("%v", err)
 	}
+	pristine := NewSearchState(data, pin)
+	var mutex sync.RWMutex
 
 	log.Printf("searching for %v", dur)
 	start := time.Now()
@@ -360,6 +362,11 @@ func main() {
 			if count == 0 || result.Badness < best.Badness {
 				log.Printf("new best score with badness %d", result.Badness)
 				best = result
+				if pin > 0 && pin < 100 {
+					mutex.Lock()
+					rePin(data, best)
+					mutex.Unlock()
+				}
 				fp, err := os.Create(outPrefix + ".html")
 				if err != nil {
 					log.Fatalf("%v", err)
@@ -392,17 +399,18 @@ func main() {
 
 	// other goroutines run jobs
 	var wg sync.WaitGroup
-	pristine := NewSearchState(data, pin)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
 			for time.Since(start) < dur {
+				mutex.RLock()
 				state := pristine.Clone()
 				result := new(SearchResult)
 				state.Solve(0, result)
 				Complain(state.Data, result)
+				mutex.RUnlock()
 				results <- result
 			}
 		}()
@@ -497,6 +505,20 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 	result.Badness += rtb.Badness.N
 	result.Schedule = append(result.Schedule, assignment)
 	state.Solve(head+1, result)
+}
+
+func rePin(data *DataSet, result *SearchResult) {
+	courseToPlacement := make(map[*Course]*CoursePlacement)
+	for _, elt := range result.Schedule {
+		courseToPlacement[elt.Course] = elt
+	}
+
+	for _, instructor := range data.Instructors {
+		for _, course := range instructor.Courses {
+			course.PinRoom = courseToPlacement[course].Room
+			course.PinTime = courseToPlacement[course].Time
+		}
+	}
 }
 
 func round(d time.Duration, nearest time.Duration) time.Duration {
