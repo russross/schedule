@@ -397,6 +397,18 @@ func main() {
 		resultsFinished <- struct{}{}
 	}()
 
+	if pin > 0 && pin < 100 {
+		// pin at 100% to establish a baseline
+		mutex.Lock()
+		state := pristine.Clone()
+		state.PinPercent = 100
+		result := new(SearchResult)
+		state.Solve(0, result)
+		Complain(state.Data, result)
+		mutex.Unlock()
+		results <- result
+	}
+
 	// other goroutines run jobs
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
