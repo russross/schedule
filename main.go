@@ -344,7 +344,6 @@ func main() {
 	}
 
 	// parse everything from CSV
-	log.Printf("parsing input file %s", infile)
 	if err := data.Parse(infile); err != nil {
 		log.Fatalf("%v", err)
 	}
@@ -369,7 +368,7 @@ func main() {
 			}
 
 			if count == 0 || result.Badness < best.Badness {
-				log.Printf("new best score with badness %d", result.Badness)
+				log.Printf("schedule found with badness %d", result.Badness)
 				best = result
 				mutex.Lock()
 				rePin(data, best)
@@ -388,7 +387,7 @@ func main() {
 				writeCSV(fp, data, result)
 				fp.Close()
 			} else if time.Since(lastReport) > time.Minute {
-				log.Printf("so far: %d runs in %v, best score of %d", attempts, round(time.Since(start), time.Second), best.Badness)
+				log.Printf("so far: %d runs in %v, badness score of %d", attempts, round(time.Since(start), time.Second), best.Badness)
 				lastReport = time.Now()
 			}
 
@@ -397,7 +396,7 @@ func main() {
 		}
 
 		if count > 0 {
-			log.Printf("best score was %d", best.Badness)
+			log.Printf("best schedule found has badness %d", best.Badness)
 		}
 		log.Printf("%d successful runs out of %d attempts in %v", count, attempts, round(time.Since(start), time.Second))
 		resultsFinished <- struct{}{}

@@ -7,6 +7,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -87,14 +88,34 @@ func (data *DataSet) Parse(filename string) error {
 	}()
 
 	// open file
-	fp, err := os.Open(filename)
-	if err != nil {
-		return err
+	var reader io.Reader
+	isCsv := false
+	if strings.HasPrefix(filename, "http:") || strings.HasPrefix(filename, "https:") {
+		const docsSuffix = "/edit?usp=sharing"
+		if strings.HasSuffix(filename, docsSuffix) {
+			filename = filename[:len(filename)-len(docsSuffix)] + "/export?format=csv"
+			isCsv = true
+		}
+		log.Printf("downloading input URL %s", filename)
+		res, err := http.Get(filename)
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		reader = res.Body
+	} else {
+		log.Printf("reading input file %s", filename)
+		fp, err := os.Open(filename)
+		if err != nil {
+			return err
+		}
+		defer fp.Close()
+		reader = fp
+		isCsv = strings.HasSuffix(filename, ".csv")
 	}
-	defer fp.Close()
 
-	if strings.HasSuffix(filename, ".csv") {
-		buf := bufio.NewReader(fp)
+	if isCsv {
+		buf := bufio.NewReader(reader)
 		reader := csv.NewReader(buf)
 		for {
 			record, err := reader.Read()
@@ -109,14 +130,14 @@ func (data *DataSet) Parse(filename string) error {
 		}
 	} else {
 		// get a line reader
-		scanner := bufio.NewScanner(fp)
+		scanner := bufio.NewScanner(reader)
 		for scanner.Scan() {
 			line := scanner.Text()
 			fields := strings.Fields(line)
 			input <- fields
 		}
 		close(input)
-		if err = scanner.Err(); err != nil {
+		if err := scanner.Err(); err != nil {
 			return err
 		}
 	}
@@ -448,7 +469,7 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	})
 
 	fmt.Fprintf(w, "<!DOCTYPE html>\n")
-	fmt.Fprintf(w, "<html>\n")
+	fmt.Fprintf(w, "<html lang=\"en\">\n")
 	fmt.Fprintf(w, "<head>\n")
 	fmt.Fprintf(w, "<title>Schedule of rooms by time</title>\n")
 	fmt.Fprintf(w, "<style>\n")
