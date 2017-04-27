@@ -304,7 +304,7 @@ func main() {
 
 	flag.IntVar(&workers, "workers", workers, "number of concurrent workers")
 	flag.Float64Var(&pin, "pin", pin, "percent chance mean that a pin will be honored")
-	flag.Float64Var(&pinDev, "pindev", pinDev, "percent chance stddev that a pin will be honoder")
+	flag.Float64Var(&pinDev, "pindev", pinDev, "percent chance stddev that a pin will be honored")
 	flag.IntVar(&reSort, "sort", reSort, "how often to re-sort sections to be placed")
 	flag.DurationVar(&dur, "time", dur, "total time to spend searching")
 	flag.DurationVar(&reStart, "restart", reStart, "start again after this long with no improvements")
@@ -366,10 +366,12 @@ func main() {
 			}
 
 			// new best for this generation?
-			if result.Generation == generation && (currentScore < 0 || result.Badness < currentScore) {
-				log.Printf("schedule found with badness %d", result.Badness)
-				currentScore = result.Badness
-				lastBest = time.Now()
+			if result.Generation == generation && (currentScore < 0 || result.Badness <= currentScore) {
+				if currentScore < 0 || result.Badness < currentScore {
+					log.Printf("schedule found with badness %d", result.Badness)
+					currentScore = result.Badness
+					lastBest = time.Now()
+				}
 				mutex.Lock()
 				rePin(data, result)
 				mutex.Unlock()
