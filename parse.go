@@ -439,7 +439,7 @@ func parseBadness(tag string) (string, int, error) {
 	}
 }
 
-func writeRoomByTime(out io.Writer, results *SearchResult) {
+func writeRoomByTime(out io.Writer, state *SearchState) {
 	w := bufio.NewWriter(out)
 	defer w.Flush()
 
@@ -450,7 +450,7 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	roomKnown := make(map[*Room]bool)
 	timeKnown := make(map[*Time]bool)
 	byRoomTime := make(map[string]*CoursePlacement)
-	for _, elt := range results.Schedule {
+	for _, elt := range state.Schedule {
 		if !roomKnown[elt.Room] {
 			roomKnown[elt.Room] = true
 			rooms = append(rooms, elt.Room)
@@ -511,7 +511,7 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	}
 	fmt.Fprintf(w, "</tbody>\n")
 	fmt.Fprintf(w, "</table>\n")
-	fmt.Fprintf(w, "<p>Schedule generated %s with badness %d</p>", time.Now().Format("Jan _2, 2006 at 3:04 PM"), results.Badness)
+	fmt.Fprintf(w, "<p>Schedule generated %s with badness %d</p>", time.Now().Format("Jan _2, 2006 at 3:04 PM"), state.Badness)
 	fmt.Fprintf(w, `<script>
     (function () {
         var numbers = {};
@@ -553,19 +553,19 @@ func writeRoomByTime(out io.Writer, results *SearchResult) {
 	fmt.Fprintf(w, "</html>\n")
 }
 
-func writeCSV(out io.Writer, data *DataSet, result *SearchResult) {
+func writeCSV(out io.Writer, data *DataSet, state *SearchState) {
 	// map courses to assigned times
 	courseToPlacement := make(map[*Course]*CoursePlacement)
-	if result != nil {
-		for _, placement := range result.Schedule {
+	if state != nil {
+		for _, placement := range state.Schedule {
 			courseToPlacement[placement.Course] = placement
 		}
 	}
 
 	var rows [][]string
 
-	if result != nil {
-		rows = append(rows, []string{fmt.Sprintf("// score %d", result.Badness)})
+	if state != nil {
+		rows = append(rows, []string{fmt.Sprintf("// score %d", state.Badness)})
 	}
 
 	// rooms

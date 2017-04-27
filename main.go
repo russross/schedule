@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"math/rand"
 	"os"
@@ -100,7 +99,12 @@ type SearchState struct {
 	InstructorTimeBadness map[InstructorTime]Badness
 	CourseTimeBadness     map[CourseTime]Badness
 	RoomTimeBadness       map[RoomTime]Badness
-	PinPercent            int
+	PinMean               float64
+	PinStddev             float64
+	ReSort                int
+	Badness               int
+	Schedule              []*CoursePlacement
+	Generation            int
 }
 
 type CoursePlacement struct {
@@ -110,18 +114,15 @@ type CoursePlacement struct {
 	Badness Badness
 }
 
-type SearchResult struct {
-	Badness  int
-	Schedule []*CoursePlacement
-}
-
-func NewSearchState(data *DataSet, pin int) *SearchState {
+func NewSearchState(data *DataSet, pin, pinDev float64, resort int) *SearchState {
 	state := &SearchState{
 		Data: data,
 		InstructorTimeBadness: make(map[InstructorTime]Badness),
 		CourseTimeBadness:     make(map[CourseTime]Badness),
 		RoomTimeBadness:       make(map[RoomTime]Badness),
-		PinPercent:            pin,
+		PinMean:               pin,
+		PinStddev:             pinDev,
+		ReSort:                resort,
 	}
 
 	// fill in RoomTimeBadness
@@ -213,7 +214,10 @@ func (state *SearchState) Clone() *SearchState {
 		InstructorTimeBadness: make(map[InstructorTime]Badness),
 		CourseTimeBadness:     make(map[CourseTime]Badness),
 		RoomTimeBadness:       make(map[RoomTime]Badness),
-		PinPercent:            state.PinPercent,
+		PinMean:               state.PinMean,
+		PinStddev:             state.PinStddev,
+		ReSort:                state.ReSort,
+		Generation:            state.Generation,
 	}
 
 	for _, elt := range state.Sections {
@@ -285,39 +289,26 @@ func (state *SearchState) SortSections(sections []*Section) {
 	})
 }
 
-func (state *SearchState) PrintSections() {
-	state.SortSections(state.Sections)
-	for _, section := range state.Sections {
-		var lst []string
-		for _, rtb := range state.CollectRoomTimeOptions(section) {
-			s := fmt.Sprintf("%s:%s", rtb.Room.Name, rtb.Time.Name)
-			lst = append(lst, s)
-		}
-		sort.Strings(lst)
-		fmt.Printf("%s => %s @ [%s]\n",
-			section.Instructor.Name,
-			section.Course.Name,
-			strings.Join(lst, " "))
-	}
-}
-
-var reSort = 15
-
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	log.SetFlags(log.Ltime)
 
 	workers := runtime.NumCPU()
 	dur := 10 * time.Second
-	pin := 0
-	infile := "input.csv"
+	pin := 93.0
+	pinDev := 5.0
+	reSort := 15
+	reStart := 30 * time.Second
+	inFile := "input.csv"
 	outPrefix := "schedule"
 
 	flag.IntVar(&workers, "workers", workers, "number of concurrent workers")
-	flag.IntVar(&pin, "pin", pin, "percent chance that a pin will be honored")
+	flag.Float64Var(&pin, "pin", pin, "percent chance mean that a pin will be honored")
+	flag.Float64Var(&pinDev, "pindev", pinDev, "percent chance stddev that a pin will be honoder")
 	flag.IntVar(&reSort, "sort", reSort, "how often to re-sort sections to be placed")
 	flag.DurationVar(&dur, "time", dur, "total time to spend searching")
-	flag.StringVar(&infile, "in", infile, "input file name")
+	flag.DurationVar(&reStart, "restart", reStart, "start again after this long with no improvements")
+	flag.StringVar(&inFile, "in", inFile, "input file name")
 	flag.StringVar(&outPrefix, "out", outPrefix, "output file prefix (.csv and .html suffixes)")
 	flag.Parse()
 	if flag.NArg() != 0 {
@@ -327,8 +318,11 @@ func main() {
 	if workers < 1 {
 		log.Fatalf("workers must be >= 1")
 	}
-	if pin < 0 || pin > 100 {
+	if pin < 0.0 || pin > 100.0 {
 		log.Fatalf("pin must be between 0 and 100")
+	}
+	if pinDev < 0.0 {
+		log.Fatalf("pindev must be >= 0")
 	}
 	if dur <= 0 {
 		log.Fatalf("time must be > 0")
@@ -344,35 +338,49 @@ func main() {
 	}
 
 	// parse everything from CSV
-	if err := data.Parse(infile); err != nil {
+	if err := data.Parse(inFile); err != nil {
 		log.Fatalf("%v", err)
 	}
-	pristine := NewSearchState(data, pin)
+	pristine := NewSearchState(data, pin, pinDev, reSort)
+	generation := 0
 	var mutex sync.RWMutex
 
-	log.Printf("searching for %v with pins honored at %d%%", dur, pin)
+	log.Printf("searching for %v with pins honored at %f%% (stddev %f%%)", dur, pin, pinDev)
 	start := time.Now()
 
 	// one goroutine gathers results
-	results := make(chan *SearchResult, workers)
+	results := make(chan *SearchState, workers)
 	resultsFinished := make(chan struct{})
 	go func() {
 		attempts, total, count := 0, 0, 0
-		var best *SearchResult
+		bestScore := -1
+		currentScore := -1
 		lastReport := start
+		lastBest := start
 		for result := range results {
 			attempts++
 
+			// failed attempt?
 			if result.Badness < 0 {
 				continue
 			}
 
-			if count == 0 || result.Badness < best.Badness {
+			// new best for this generation?
+			if result.Generation == generation && (currentScore < 0 || result.Badness < currentScore) {
 				log.Printf("schedule found with badness %d", result.Badness)
-				best = result
+				currentScore = result.Badness
+				lastBest = time.Now()
 				mutex.Lock()
-				rePin(data, best)
+				rePin(data, result)
 				mutex.Unlock()
+			}
+
+			// is this an all-time best?
+			if bestScore < 0 || result.Badness < bestScore {
+				log.Printf("new best score, saving result")
+				bestScore = result.Badness
+
+				// save the HTML format
 				fp, err := os.Create(outPrefix + ".html")
 				if err != nil {
 					log.Fatalf("%v", err)
@@ -380,15 +388,30 @@ func main() {
 				writeRoomByTime(fp, result)
 				fp.Close()
 
+				// save the CSV format
 				fp, err = os.Create(outPrefix + ".csv")
 				if err != nil {
 					log.Fatalf("%v", err)
 				}
 				writeCSV(fp, data, result)
 				fp.Close()
-			} else if time.Since(lastReport) > time.Minute {
-				log.Printf("so far: %d runs in %v, badness score of %d", attempts, round(time.Since(start), time.Second), best.Badness)
+			}
+
+			if time.Since(lastReport) > time.Minute {
+				log.Printf("so far: %d runs in %v, badness score of %d",
+					attempts, round(time.Since(start), time.Second), bestScore)
 				lastReport = time.Now()
+			}
+
+			if time.Since(lastBest) > reStart {
+				log.Printf("no improvements for %v, restarting", round(time.Since(lastBest), time.Second))
+				lastBest = time.Now()
+				currentScore = -1
+
+				mutex.Lock()
+				generation++
+				unPin(data)
+				mutex.Unlock()
 			}
 
 			total += result.Badness
@@ -396,9 +419,10 @@ func main() {
 		}
 
 		if count > 0 {
-			log.Printf("best schedule found has badness %d", best.Badness)
+			log.Printf("best schedule found has badness %d", bestScore)
 		}
-		log.Printf("%d successful runs out of %d attempts in %v", count, attempts, round(time.Since(start), time.Second))
+		log.Printf("%d successful runs out of %d attempts with %d generations in %v",
+			count, attempts, generation+1, round(time.Since(start), time.Second))
 		resultsFinished <- struct{}{}
 	}()
 
@@ -406,12 +430,13 @@ func main() {
 		// pin at 100% to establish a baseline
 		mutex.Lock()
 		state := pristine.Clone()
-		state.PinPercent = 100
-		result := new(SearchResult)
-		state.Solve(0, result)
-		Complain(state.Data, result)
+		state.Generation = generation
+		state.PinMean = 100.0
+		state.PinStddev = 0.0
+		state.Solve(0)
+		state.Complain()
 		mutex.Unlock()
-		results <- result
+		results <- state
 	}
 
 	// other goroutines run jobs
@@ -424,11 +449,11 @@ func main() {
 			for time.Since(start) < dur {
 				mutex.RLock()
 				state := pristine.Clone()
-				result := new(SearchResult)
-				state.Solve(0, result)
-				Complain(state.Data, result)
+				state.Generation = generation
+				state.Solve(0)
+				state.Complain()
 				mutex.RUnlock()
-				results <- result
+				results <- state
 			}
 		}()
 	}
@@ -438,14 +463,14 @@ func main() {
 	<-resultsFinished
 }
 
-func (state *SearchState) Solve(head int, result *SearchResult) {
+func (state *SearchState) Solve(head int) {
 	if head == len(state.Sections) {
 		// success
 		return
 	}
 
 	// sort remaining sections by number of options
-	if head%reSort == 0 {
+	if head%state.ReSort == 0 {
 		state.SortSections(state.Sections[head:])
 	}
 
@@ -456,12 +481,12 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 	options := state.CollectRoomTimeOptions(section)
 
 	// consider pinned courses:
-	// if PinPercent is 100%, only the pinned value is acceptable
+	// if PinMean is 100%, only the pinned value is acceptable
 	// if < 100%, then check if it is even an option anymore
-	// and if so, pick it with the PinPercent chance before falling
+	// and if so, pick it with the PinMean chance before falling
 	// back to a normal lottery
 	if section.Course.PinRoom != nil || section.Course.PinTime != nil {
-		if state.PinPercent == 100 || rand.Intn(100) < state.PinPercent {
+		if usePin(state.PinMean, state.PinStddev) {
 			var altOptions []RoomTimeBadness
 			for _, elt := range options {
 				if (section.Course.PinRoom == nil || elt.Room == section.Course.PinRoom) &&
@@ -469,7 +494,7 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 					altOptions = append(altOptions, elt)
 				}
 			}
-			if state.PinPercent == 100 || len(altOptions) > 0 {
+			if len(altOptions) > 0 {
 				options = altOptions
 			}
 		}
@@ -477,7 +502,7 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 
 	if len(options) == 0 {
 		// failure
-		result.Badness = -1
+		state.Badness = -1
 		return
 	}
 
@@ -519,14 +544,14 @@ func (state *SearchState) Solve(head int, result *SearchResult) {
 		Time:    rtb.Time,
 		Badness: rtb.Badness,
 	}
-	result.Badness += rtb.Badness.N
-	result.Schedule = append(result.Schedule, assignment)
-	state.Solve(head+1, result)
+	state.Badness += rtb.Badness.N
+	state.Schedule = append(state.Schedule, assignment)
+	state.Solve(head + 1)
 }
 
-func rePin(data *DataSet, result *SearchResult) {
+func rePin(data *DataSet, state *SearchState) {
 	courseToPlacement := make(map[*Course]*CoursePlacement)
-	for _, elt := range result.Schedule {
+	for _, elt := range state.Schedule {
 		courseToPlacement[elt.Course] = elt
 	}
 
@@ -534,6 +559,15 @@ func rePin(data *DataSet, result *SearchResult) {
 		for _, course := range instructor.Courses {
 			course.PinRoom = courseToPlacement[course].Room
 			course.PinTime = courseToPlacement[course].Time
+		}
+	}
+}
+
+func unPin(data *DataSet) {
+	for _, instructor := range data.Instructors {
+		for _, course := range instructor.Courses {
+			course.PinRoom = nil
+			course.PinTime = nil
 		}
 	}
 }
@@ -549,13 +583,13 @@ func round(d time.Duration, nearest time.Duration) time.Duration {
 	return d - r
 }
 
-func Complain(data *DataSet, result *SearchResult) {
-	if result.Badness < 0 {
+func (state *SearchState) Complain() {
+	if state.Badness < 0 {
 		return
 	}
 
 	instructorToPlacements := make(map[*Instructor][]*CoursePlacement)
-	for _, elt := range result.Schedule {
+	for _, elt := range state.Schedule {
 		lst := instructorToPlacements[elt.Course.Instructor]
 		instructorToPlacements[elt.Course.Instructor] = append(lst, elt)
 	}
@@ -578,7 +612,7 @@ func Complain(data *DataSet, result *SearchResult) {
 			if gap < 2 {
 				continue
 			}
-			result.Badness += gap * gap
+			state.Badness += gap * gap
 		}
 	}
 
@@ -589,7 +623,23 @@ func Complain(data *DataSet, result *SearchResult) {
 			inRoom[elt.Room] = struct{}{}
 		}
 		if n := len(inRoom); n > 1 {
-			result.Badness += n - 1
+			state.Badness += n - 1
 		}
+	}
+}
+
+func usePin(pin, stddev float64) bool {
+	if pin >= 100.0 {
+		return true
+	}
+	if pin <= 0.0 {
+		return false
+	}
+	for {
+		n := rand.NormFloat64()*stddev + pin
+		if n >= 100.0 || n < 0.0 {
+			continue
+		}
+		return rand.Float64()*100.0 < n
 	}
 }
