@@ -295,9 +295,13 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 			continue
 		}
 
-		// handle "twoslots" tag
+		// handle multiple slots
 		if rawTag == "twoslots" {
-			course.TwoSlots = true
+			course.Slots = 2
+			continue
+		}
+		if rawTag == "threeslots" {
+			course.Slots = 3
 			continue
 		}
 

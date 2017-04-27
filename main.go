@@ -26,7 +26,7 @@ type Course struct {
 	Rooms      map[*Room]Badness
 	Times      map[*Time]Badness
 	Conflicts  map[*Course]Badness
-	TwoSlots   bool
+	Slots      int
 	PinRoom    *Room
 	PinTime    *Time
 }
@@ -165,10 +165,14 @@ func NewSearchState(data *DataSet, pin, pinDev float64, resort int) *SearchState
 						courseTimeBadness = instructorTimeBadness
 					}
 
-					// if course requires two time slots, make sure this time has a
-					// following slot
-					if course.TwoSlots && time.Next == nil {
-						courseTimeBadness = impossible
+					// if course requires multiple time slots, make sure this time has
+					// following slots
+					for t, remaining := time.Next, course.Slots-1; remaining > 0; remaining-- {
+						if t == nil {
+							courseTimeBadness = impossible
+							break
+						}
+						t = t.Next
 					}
 
 					badness := worst(roomBadness, courseTimeBadness, instructorTimeBadness)
@@ -250,14 +254,17 @@ func worst(lst ...Badness) Badness {
 
 func (state *SearchState) CollectRoomTimeOptions(section *Section) []RoomTimeBadness {
 	var lst []RoomTimeBadness
+
+options:
 	for _, rtb := range section.RoomTimeOptions {
 		if badness := state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}]; badness.N < 0 {
 			continue
 		}
-		if section.Course.TwoSlots {
-			if badness := state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time.Next}]; badness.N < 0 {
-				continue
+		for t, remaining := rtb.Time.Next, section.Course.Slots-1; remaining > 0; remaining-- {
+			if badness := state.RoomTimeBadness[RoomTime{rtb.Room, t}]; badness.N < 0 {
+				continue options
 			}
+			t = t.Next
 		}
 
 		instructorBadness := state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}]
@@ -294,11 +301,11 @@ func main() {
 	log.SetFlags(log.Ltime)
 
 	workers := runtime.NumCPU()
-	dur := 10 * time.Second
+	dur := time.Minute
 	pin := 93.0
 	pinDev := 5.0
 	reSort := 15
-	reStart := 30 * time.Second
+	reStart := 20 * time.Second
 	inFile := "input.csv"
 	outPrefix := "schedule"
 
@@ -526,16 +533,18 @@ func (state *SearchState) Solve(head int) {
 	// place the next section
 	state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}] = impossible
 	state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}] = impossible
-	if section.Course.TwoSlots {
-		state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time.Next}] = impossible
-		state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time.Next}] = impossible
+	for t, remaining := rtb.Time.Next, section.Course.Slots-1; remaining > 0; remaining-- {
+		state.RoomTimeBadness[RoomTime{rtb.Room, t}] = impossible
+		state.InstructorTimeBadness[InstructorTime{section.Instructor, t}] = impossible
+		t = t.Next
 	}
 	for other, badness := range section.Course.Conflicts {
 		old := state.CourseTimeBadness[CourseTime{other, rtb.Time}]
 		state.CourseTimeBadness[CourseTime{other, rtb.Time}] = worst(old, badness)
-		if section.Course.TwoSlots {
-			old := state.CourseTimeBadness[CourseTime{other, rtb.Time.Next}]
-			state.CourseTimeBadness[CourseTime{other, rtb.Time.Next}] = worst(old, badness)
+		for t, remaining := rtb.Time.Next, section.Course.Slots-1; remaining > 0; remaining-- {
+			old := state.CourseTimeBadness[CourseTime{other, t}]
+			state.CourseTimeBadness[CourseTime{other, t}] = worst(old, badness)
+			t = t.Next
 		}
 	}
 
