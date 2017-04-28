@@ -557,7 +557,7 @@ func writeRoomByTime(out io.Writer, state *SearchState) {
 	fmt.Fprintf(w, "</html>\n")
 }
 
-func writeCSV(out io.Writer, data *DataSet, state *SearchState) {
+func save(isCsv bool, out io.Writer, data *DataSet, state *SearchState) {
 	// map courses to assigned times
 	courseToPlacement := make(map[*Course]*CoursePlacement)
 	if state != nil {
@@ -665,23 +665,32 @@ func writeCSV(out io.Writer, data *DataSet, state *SearchState) {
 
 	// write data
 	buf := bufio.NewWriter(out)
-	w := csv.NewWriter(buf)
-	defer w.Flush()
 	defer buf.Flush()
 
-	// find longest row
-	longest := 0
-	for _, row := range rows {
-		if len(row) > longest {
-			longest = len(row)
-		}
-	}
+	if isCsv {
+		w := csv.NewWriter(buf)
+		defer w.Flush()
 
-	for _, row := range rows {
-		for len(row) < longest {
-			row = append(row, "")
+		// find longest row
+		longest := 0
+		for _, row := range rows {
+			if len(row) > longest {
+				longest = len(row)
+			}
 		}
-		w.Write(row)
+
+		for _, row := range rows {
+			for len(row) < longest {
+				row = append(row, "")
+			}
+			w.Write(row)
+		}
+	} else {
+		for _, row := range rows {
+			s := strings.Join(row, " ")
+			buf.WriteString(s)
+			buf.WriteString("\n")
+		}
 	}
 }
 

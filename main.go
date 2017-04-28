@@ -316,7 +316,7 @@ func main() {
 	flag.DurationVar(&dur, "time", dur, "total time to spend searching")
 	flag.DurationVar(&reStart, "restart", reStart, "start again after this long with no improvements")
 	flag.StringVar(&inFile, "in", inFile, "input file name")
-	flag.StringVar(&outPrefix, "out", outPrefix, "output file prefix (.csv and .html suffixes)")
+	flag.StringVar(&outPrefix, "out", outPrefix, "output file prefix (.txt and .html suffixes)")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		flag.PrintDefaults()
@@ -398,11 +398,11 @@ func main() {
 				fp.Close()
 
 				// save the CSV format
-				fp, err = os.Create(outPrefix + ".csv")
+				fp, err = os.Create(outPrefix + ".txt")
 				if err != nil {
 					log.Fatalf("%v", err)
 				}
-				writeCSV(fp, data, result)
+				save(false, fp, data, result)
 				fp.Close()
 			}
 
