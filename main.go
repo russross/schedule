@@ -317,7 +317,7 @@ func main() {
 	pinDev := 5.0
 	reSort := 15
 	reStart := 20 * time.Second
-	inFile := "input.csv"
+	inFile := "input.txt"
 	outPrefix := "schedule"
 
 	flag.IntVar(&workers, "workers", workers, "number of concurrent workers")
