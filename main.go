@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"math/rand"
 	"os"
@@ -18,6 +19,7 @@ type Instructor struct {
 	Name    string
 	Times   map[*Time]Badness
 	Courses []*Course
+	Days    int
 }
 
 type Course struct {
@@ -42,6 +44,14 @@ type Time struct {
 	Tags     []string
 	Next     *Time
 	Position int
+}
+
+func (t *Time) Prefix() string {
+	brk := strings.IndexAny(t.Name, "0123456789")
+	if brk < 0 {
+		return ""
+	}
+	return t.Name[:brk]
 }
 
 type Badness struct {
@@ -105,6 +115,7 @@ type SearchState struct {
 	Badness               int
 	Schedule              []*CoursePlacement
 	Generation            int
+	BadNotes              []string
 }
 
 type CoursePlacement struct {
@@ -599,23 +610,34 @@ func (state *SearchState) Complain() {
 		return
 	}
 
+	// find what count as days (multiple time slots with the same prefix)
+	timesPerDay := make(map[string]int)
+	for _, time := range state.Data.Times {
+		if prefix := time.Prefix(); prefix != "" {
+			timesPerDay[prefix]++
+		}
+	}
+
 	instructorToPlacements := make(map[*Instructor][]*CoursePlacement)
 	for _, elt := range state.Schedule {
 		lst := instructorToPlacements[elt.Course.Instructor]
 		instructorToPlacements[elt.Course.Instructor] = append(lst, elt)
 	}
 
-	// penalize instructors with spread out schedules on a given day
-	for _, placements := range instructorToPlacements {
+	roomBadness := 0
+
+	for instructor, placements := range instructorToPlacements {
+		// penalize instructors with spread out schedules on a given day
 		sort.Slice(placements, func(a, b int) bool {
 			return placements[a].Time.Position < placements[b].Time.Position
 		})
 
+		bad := 0
 		for i, a := range placements[:len(placements)-1] {
 			b := placements[i+1]
-			aBreak := strings.IndexAny(a.Time.Name, "0123456789")
-			bBreak := strings.IndexAny(b.Time.Name, "0123456789")
-			if aBreak < 1 || bBreak < 1 || a.Time.Name[:aBreak] != b.Time.Name[:bBreak] {
+			aPrefix := a.Time.Prefix()
+			bPrefix := b.Time.Prefix()
+			if aPrefix == "" || bPrefix == "" || aPrefix != bPrefix {
 				continue
 			}
 
@@ -623,19 +645,79 @@ func (state *SearchState) Complain() {
 			if gap < 2 {
 				continue
 			}
-			state.Badness += gap * gap
+			bad += gap * gap
 		}
-	}
+		if bad > 0 {
+			state.Badness += bad
+			note := fmt.Sprintf("Added %2d due to gaps in schedule for %s", bad, instructor.Name)
+			state.BadNotes = append(state.BadNotes, note)
+		}
 
-	// penalize instructors with courses in too many rooms
-	for _, placements := range instructorToPlacements {
+		// penalize instructors with courses in too many rooms
 		inRoom := make(map[*Room]struct{})
 		for _, elt := range placements {
 			inRoom[elt.Room] = struct{}{}
 		}
 		if n := len(inRoom); n > 1 {
 			state.Badness += n - 1
+			roomBadness += n - 1
 		}
+
+		// how many courses does the instructor have on each day?
+		onDay := make(map[string]int)
+		for _, elt := range placements {
+			// find how many classes this instructor has on each day
+			// only consider days with multiple slots (no evenings, online, etc.)
+			if prefix := elt.Time.Prefix(); timesPerDay[prefix] > 1 {
+				onDay[prefix]++
+			}
+		}
+
+		// try to honor instructor preferences for number of days teaching
+		if instructor.Days > 0 && len(onDay) != instructor.Days {
+			gap := instructor.Days - len(onDay)
+			if gap < 0 {
+				gap = -gap
+			}
+			state.Badness += 10 * gap
+			s := "s"
+			if len(onDay) == 1 {
+				s = ""
+			}
+			note := fmt.Sprintf("Added %2d because courses for %s were placed on %d day%s",
+				10*gap, instructor.Name, len(onDay), s)
+			state.BadNotes = append(state.BadNotes, note)
+		}
+
+		// penalize workloads that are unevenly split across days
+		if len(onDay) > 1 {
+			// only interesting if instructor has classes on at least two days
+			max, min := -1, -1
+			i := 0
+			for _, count := range onDay {
+				if i == 0 || count > max {
+					max = count
+				}
+				if i == 0 || count < min {
+					min = count
+				}
+				i++
+			}
+
+			// add a penalty if there is more than one class difference
+			// between the most and fewest on a day
+			if gap := max - min; gap > 1 {
+				state.Badness += gap * gap
+				note := fmt.Sprintf("Added %2d because courses for %s were split unevenly across days",
+					gap*gap, instructor.Name)
+				state.BadNotes = append(state.BadNotes, note)
+			}
+		}
+	}
+
+	if roomBadness > 0 {
+		note := fmt.Sprintf("Added %2d total for how much instructors are spread across classrooms", roomBadness)
+		state.BadNotes = append(state.BadNotes, note)
 	}
 }
 

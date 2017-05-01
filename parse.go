@@ -207,13 +207,23 @@ func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
 
 	// parse available times
 	for _, rawTag := range fields[2:] {
+		// handle days preferences
+		if rawTag == "oneday" {
+			instructor.Days = 1
+			continue
+		}
+		if rawTag == "twodays" {
+			instructor.Days = 2
+			continue
+		}
+
 		tag, n, err := parseBadness(rawTag)
 		if err != nil {
 			log.Printf("when parsing times for instructor %s", instructor.Name)
 			log.Printf("expected time of form %q but found %q", "time:badness", tag)
 			return nil, err
 		}
-		badness := Badness{n, "instructor preferrence"}
+		badness := Badness{n, "instructor preference"}
 
 		hits := 0
 		if time, present := data.Times[tag]; present {
@@ -516,16 +526,41 @@ func writeRoomByTime(out io.Writer, state *SearchState) {
 	fmt.Fprintf(w, "</tbody>\n")
 	fmt.Fprintf(w, "</table>\n")
 	fmt.Fprintf(w, "<p>Schedule generated %s with badness %d</p>", time.Now().Format("Jan _2, 2006 at 3:04 PM"), state.Badness)
+
+	if len(state.BadNotes) > 0 {
+		sort.Sort(sort.Reverse(sort.StringSlice(state.BadNotes)))
+		fmt.Fprintf(w, "<ul>\n")
+		for _, s := range state.BadNotes {
+			fmt.Fprintf(w, "  <li>%s</li>\n", html.EscapeString(strings.Replace(s, "  ", " ", -1)))
+		}
+		fmt.Fprintf(w, "</ul>\n")
+	}
+
 	fmt.Fprintf(w, `<script>
     (function () {
         var numbers = {};
         var next = 1;
         var tds = document.getElementsByTagName('td');
+        var notes = document.getElementsByTagName('li');
+        for (var i = 0; i < notes.length; i++) {
+            notes[i].innerHTML = '<span>' + notes[i].innerHTML + '</span>';
+        }
         for (var i = 0; i < tds.length; i++) {
             var parts = tds[i].innerHTML.split('<br>');
             if (parts.length > 1) {
                 for (var j = 0; j < parts.length && j < 2; j++) {
                     if (!numbers.hasOwnProperty(parts[j])) {
+                        for (var k = 0; k < notes.length; k++) {
+                            var text = notes[k].innerHTML;
+                            var index = text.indexOf(parts[j]);
+                            if (index >= 0) {
+                                text = text.substring(0, index) +
+                                    '<span class="number' + next + '">' + parts[j] + '</span>' +
+                                    text.substring(index + parts[j].length);
+                                notes[k].innerHTML = text;
+                            }
+                        }
+
                         numbers[parts[j]] = next;
                         next++;
                     }
