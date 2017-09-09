@@ -16,10 +16,11 @@ import (
 // data types for parsing and processing input data
 
 type Instructor struct {
-	Name    string
-	Times   map[*Time]Badness
-	Courses []*Course
-	Days    int
+	Name     string
+	Times    map[*Time]Badness
+	Courses  []*Course
+	Days     int
+	MinRooms int
 }
 
 type Course struct {
@@ -316,7 +317,7 @@ func main() {
 	pin := 93.0
 	pinDev := 5.0
 	reSort := 15
-	reStart := 20 * time.Second
+	reStart := 30 * time.Second
 	inFile := "input.txt"
 	outPrefix := "schedule"
 
@@ -355,10 +356,12 @@ func main() {
 		TagToTimes: make(map[string][]*Time),
 	}
 
-	// parse everything from CSV
+	// parse everything
 	if err := data.Parse(inFile); err != nil {
 		log.Fatalf("%v", err)
 	}
+	log.Printf("finding the minimum possible number of rooms for each instructor")
+	findMinRooms(data.Instructors)
 	pristine := NewSearchState(data, pin, pinDev, reSort)
 	generation := 0
 	var mutex sync.RWMutex
@@ -658,9 +661,9 @@ func (state *SearchState) Complain() {
 		for _, elt := range placements {
 			inRoom[elt.Room] = struct{}{}
 		}
-		if n := len(inRoom); n > 1 {
-			state.Badness += n - 1
-			roomBadness += n - 1
+		if extra := len(inRoom) - instructor.MinRooms; extra > 0 {
+			state.Badness += extra * extra
+			roomBadness += extra * extra
 		}
 
 		// how many courses does the instructor have on each day?
@@ -735,4 +738,81 @@ func usePin(pin, stddev float64) bool {
 		}
 		return rand.Float64()*100.0 < n
 	}
+}
+
+// find the minimum set of rooms necessary for an instructor
+// to cover all assigned courses.
+// note: this is the hitting set problem, which is np-complete.
+// our n is the number of courses a single instructor teaches, so
+// we just brute force it
+func findMinRooms(instructors map[string]*Instructor) {
+	for _, instructor := range instructors {
+		// get a complete list of rooms the instructor can use
+		allRooms := make(map[*Room]struct{})
+		for _, course := range instructor.Courses {
+			for room := range course.Rooms {
+				allRooms[room] = struct{}{}
+			}
+		}
+		rooms := make([]*Room, len(allRooms))
+		for room := range allRooms {
+			rooms = append(rooms, room)
+		}
+
+		// note: if the loop ends without finding a solution with
+		// fewer than the max number of rooms, it will leave the
+		// result at the max number without bothering to prove it
+	minRoomsLoop:
+		for instructor.MinRooms = 1; instructor.MinRooms < len(instructor.Courses); instructor.MinRooms++ {
+			n, k := len(rooms), instructor.MinRooms
+			set := nChooseKInit(n, k)
+
+		setLoop:
+			for nChooseKNext(set, n, k) {
+			courseLoop:
+				for _, course := range instructor.Courses {
+					for _, roomN := range set {
+						if _, found := course.Rooms[rooms[roomN]]; found {
+							continue courseLoop
+						}
+					}
+					continue setLoop
+				}
+
+				// success!
+				break minRoomsLoop
+			}
+		}
+	}
+}
+
+func nChooseKInit(n, k int) []int {
+	if k > n || n < 1 {
+		panic("n choose k got bad inputs")
+	}
+	lst := make([]int, k)
+	for i := range lst {
+		lst[i] = -1
+	}
+	return lst
+}
+
+func nChooseKNext(lst []int, n, k int) bool {
+	if lst[0] == -1 {
+		for i := 0; i < k; i++ {
+			lst[i] = i
+		}
+		return true
+	}
+	for i := 0; i < k; i++ {
+		elt := lst[k-1-i]
+		if elt < n-1-i {
+			for j := k - 1 - i; j < k; j++ {
+				elt++
+				lst[j] = elt
+			}
+			return true
+		}
+	}
+	return false
 }
