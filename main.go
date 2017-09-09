@@ -627,8 +627,6 @@ func (state *SearchState) Complain() {
 		instructorToPlacements[elt.Course.Instructor] = append(lst, elt)
 	}
 
-	roomBadness := 0
-
 	for instructor, placements := range instructorToPlacements {
 		// penalize instructors with spread out schedules on a given day
 		sort.Slice(placements, func(a, b int) bool {
@@ -662,8 +660,10 @@ func (state *SearchState) Complain() {
 			inRoom[elt.Room] = struct{}{}
 		}
 		if extra := len(inRoom) - instructor.MinRooms; extra > 0 {
-			state.Badness += extra * extra
-			roomBadness += extra * extra
+			bad := extra * extra
+			state.Badness += bad
+			note := fmt.Sprintf("Added %2d because %s is scheduled across more rooms than the minimum", bad, instructor.Name)
+			state.BadNotes = append(state.BadNotes, note)
 		}
 
 		// how many courses does the instructor have on each day?
@@ -716,11 +716,6 @@ func (state *SearchState) Complain() {
 				state.BadNotes = append(state.BadNotes, note)
 			}
 		}
-	}
-
-	if roomBadness > 0 {
-		note := fmt.Sprintf("Added %2d total for how much instructors are spread across classrooms", roomBadness)
-		state.BadNotes = append(state.BadNotes, note)
 	}
 }
 
