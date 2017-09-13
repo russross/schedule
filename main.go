@@ -648,9 +648,17 @@ func (state *SearchState) Complain() {
 			}
 			bad += gap * gap
 		}
+
+		// special case: when packing everything on one day, try to spread it out a little
+		if instructor.Days == 1 {
+			bad = bad - 4
+			if bad < 0 {
+				bad = -bad
+			}
+		}
 		if bad > 0 {
 			state.Badness += bad
-			note := fmt.Sprintf("Added %2d due to gaps in schedule for %s", bad, instructor.Name)
+			note := fmt.Sprintf("Added %2d because %s has gaps between classes", bad, instructor.Name)
 			state.BadNotes = append(state.BadNotes, note)
 		}
 
@@ -711,7 +719,7 @@ func (state *SearchState) Complain() {
 			// between the most and fewest on a day
 			if gap := max - min; gap > 1 {
 				state.Badness += gap * gap
-				note := fmt.Sprintf("Added %2d because courses for %s were split unevenly across days",
+				note := fmt.Sprintf("Added %2d because %s has more classes on some days than others",
 					gap*gap, instructor.Name)
 				state.BadNotes = append(state.BadNotes, note)
 			}

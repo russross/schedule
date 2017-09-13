@@ -659,6 +659,12 @@ func save(isCsv bool, out io.Writer, data *DataSet, state *SearchState) {
 		}
 		row := []string{"instructor:", instructor.Name}
 		row = append(row, contractTimes(instructor.Times, data)...)
+		switch instructor.Days {
+		case 1:
+			row = append(row, "oneday")
+		case 2:
+			row = append(row, "twodays")
+		}
 		rows = append(rows, row)
 
 		// this instructor's courses
@@ -677,6 +683,12 @@ func save(isCsv bool, out io.Writer, data *DataSet, state *SearchState) {
 			row = append(row, contractRooms(course.Rooms, data)...)
 			if len(course.Times) > 0 {
 				row = append(row, contractTimes(course.Times, data)...)
+			}
+			switch course.Slots {
+			case 2:
+				row = append(row, "twoslots")
+			case 3:
+				row = append(row, "threeslots")
 			}
 			rows = append(rows, row)
 		}
@@ -791,8 +803,18 @@ func contractTimes(in map[*Time]Badness, data *DataSet) []string {
 	}
 	var out []string
 
+	// sort tags biggest to smallest
+	var tags []string
+	for tag := range data.TagToTimes {
+		tags = append(tags, tag)
+	}
+	sort.Slice(tags, func(a, b int) bool {
+		return len(data.TagToTimes[tags[a]]) > len(data.TagToTimes[tags[b]])
+	})
+
 tagloop:
-	for tag, times := range data.TagToTimes {
+	for _, tag := range tags {
+		times := data.TagToTimes[tag]
 		n := -1
 		for i, time := range times {
 			badness, present := available[time]
