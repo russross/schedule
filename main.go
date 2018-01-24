@@ -168,13 +168,18 @@ func NewSearchState(data *DataSet, pin, pinDev float64, resort int) *SearchState
 				// intersect course times with instructor times
 				for time, instructorTimeBadness := range instructor.Times {
 					courseTimeBadness, present := course.Times[time]
-					if !present {
-						courseTimeBadness = impossible
-					}
 
-					// if no course times specified, just use instructor times
-					if len(course.Times) == 0 {
+					// combine the course time badness with instructor time badness
+					switch {
+					case len(course.Times) == 0:
+						// use the instructor time badness
 						courseTimeBadness = instructorTimeBadness
+					case !present:
+						// this course has allowed times, but this is not one of them
+						courseTimeBadness = impossible
+					default:
+						// pick between instructor and course restraints
+						courseTimeBadness = worst(courseTimeBadness, instructorTimeBadness)
 					}
 
 					// if course requires multiple time slots, make sure this time has
@@ -187,15 +192,13 @@ func NewSearchState(data *DataSet, pin, pinDev float64, resort int) *SearchState
 						t = t.Next
 					}
 
+					state.CourseTimeBadness[CourseTime{course, time}] = courseTimeBadness
+
+					// make an entry for the section
 					badness := worst(roomBadness, courseTimeBadness, instructorTimeBadness)
 					if badness.N < 0 {
 						continue
 					}
-
-					// note available times in CourseTimeBadness
-					state.CourseTimeBadness[CourseTime{course, time}] = badness
-
-					// make an entry for the section
 					rtb := RoomTimeBadness{
 						Room:    room,
 						Time:    time,
@@ -363,6 +366,7 @@ func main() {
 	log.Printf("finding the minimum possible number of rooms for each instructor")
 	findMinRooms(data.Instructors)
 	pristine := NewSearchState(data, pin, pinDev, reSort)
+
 	generation := 0
 	var mutex sync.RWMutex
 

@@ -227,18 +227,14 @@ func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
 
 		hits := 0
 		if time, present := data.Times[tag]; present {
-			if badness2, present := instructor.Times[time]; present && badness2.N > badness.N {
-				instructor.Times[time] = badness2
-			} else {
+			if badness2, present := instructor.Times[time]; !present || badness.N > badness2.N {
 				instructor.Times[time] = badness
 			}
 			hits++
 		}
 		if times, present := data.TagToTimes[tag]; present {
 			for _, time := range times {
-				if badness2, present := instructor.Times[time]; present && badness2.N > badness.N {
-					instructor.Times[time] = badness2
-				} else {
+				if badness2, present := instructor.Times[time]; !present || badness.N > badness2.N {
 					instructor.Times[time] = badness
 				}
 			}
@@ -324,26 +320,20 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 
 		hits := 0
 		if room, present := data.Rooms[tag]; present {
-			if badness2, present := course.Rooms[room]; present && badness2.N > badness.N {
-				course.Rooms[room] = badness2
-			} else {
+			if badness2, present := course.Rooms[room]; !present || badness.N > badness2.N {
 				course.Rooms[room] = badness
 			}
 			hits++
 		}
 		if time, present := data.Times[tag]; present {
-			if badness2, present := course.Times[time]; present && badness2.N > badness.N {
-				course.Times[time] = badness2
-			} else {
+			if badness2, present := course.Times[time]; !present || badness.N > badness2.N {
 				course.Times[time] = badness
 			}
 			hits++
 		}
 		if rooms, present := data.TagToRooms[tag]; present {
 			for _, room := range rooms {
-				if badness2, present := course.Rooms[room]; present && badness2.N > badness.N {
-					course.Rooms[room] = badness2
-				} else {
+				if badness2, present := course.Rooms[room]; !present || badness.N > badness2.N {
 					course.Rooms[room] = badness
 				}
 			}
@@ -351,9 +341,7 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 		}
 		if times, present := data.TagToTimes[tag]; present {
 			for _, time := range times {
-				if badness2, present := course.Times[time]; present && badness2.N > badness.N {
-					course.Times[time] = badness2
-				} else {
+				if badness2, present := course.Times[time]; !present || badness.N > badness2.N {
 					course.Times[time] = badness
 				}
 			}
