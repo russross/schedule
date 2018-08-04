@@ -7,141 +7,71 @@ import (
 	"html"
 	"io"
 	"log"
-	"net/http"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-func (data *DataSet) Parse(filename string) error {
-	result := make(chan error, 1)
-	input := make(chan []string)
-
-	go func() {
-		// recently-parsed objects for context-sensitive items
-		var instructor *Instructor
-		var time *Time
-		linenumber := 0
-		var returnErr error
-		for input := range input {
-			if returnErr != nil {
-				continue
+func (data *DataSet) Parse(filename string, lines [][]string) error {
+	// recently-parsed objects for context-sensitive items
+	var instructor *Instructor
+	var time *Time
+	for linenumber, line := range lines {
+		var fields []string
+		for _, elt := range line {
+			comment := false
+			if i := strings.Index(elt, "//"); i >= 0 {
+				elt = elt[:i]
+				comment = true
 			}
-			linenumber++
-
-			var fields []string
-			for _, elt := range input {
-				comment := false
-				if i := strings.Index(elt, "//"); i >= 0 {
-					elt = elt[:i]
-					comment = true
-				}
-				s := strings.TrimSpace(elt)
-				if s != "" {
-					fields = append(fields, s)
-				}
-				if comment {
-					break
-				}
+			s := strings.TrimSpace(elt)
+			if s != "" {
+				fields = append(fields, s)
 			}
-
-			// ignore blank/comment lines
-			if len(fields) == 0 {
-				continue
-			}
-
-			// process a line of input
-			var err error
-			switch fields[0] {
-			case "instructor:":
-				if instructor, err = data.ParseInstructor(fields); err != nil {
-					returnErr = fmt.Errorf("%q line %d: %v", filename, linenumber, err)
-				}
-
-			case "course:":
-				if _, err = data.ParseCourse(fields, instructor); err != nil {
-					returnErr = fmt.Errorf("%q line %d: %v", filename, linenumber, err)
-				}
-
-			case "room:":
-				if _, err = data.ParseRoom(fields); err != nil {
-					returnErr = fmt.Errorf("%q line %d: %v", filename, linenumber, err)
-				}
-
-			case "time:":
-				if time, err = data.ParseTime(fields, time); err != nil {
-					returnErr = fmt.Errorf("%q line %d: %v", filename, linenumber, err)
-				}
-
-			case "conflict:":
-				if err = data.ParseConflict(fields); err != nil {
-					returnErr = fmt.Errorf("%q line %d: %v", filename, linenumber, err)
-				}
-
-			default:
-				returnErr = fmt.Errorf("%q line %d: unknown line", filename, linenumber)
-			}
-		}
-		result <- returnErr
-	}()
-
-	// open file
-	var reader io.Reader
-	isCsv := false
-	if strings.HasPrefix(filename, "http:") || strings.HasPrefix(filename, "https:") {
-		const docsSuffix = "/edit?usp=sharing"
-		if strings.HasSuffix(filename, docsSuffix) {
-			filename = filename[:len(filename)-len(docsSuffix)] + "/export?format=csv"
-			isCsv = true
-		}
-		log.Printf("downloading input URL %s", filename)
-		res, err := http.Get(filename)
-		if err != nil {
-			return err
-		}
-		defer res.Body.Close()
-		reader = res.Body
-	} else {
-		log.Printf("reading input file %s", filename)
-		fp, err := os.Open(filename)
-		if err != nil {
-			return err
-		}
-		defer fp.Close()
-		reader = fp
-		isCsv = strings.HasSuffix(filename, ".csv")
-	}
-
-	if isCsv {
-		buf := bufio.NewReader(reader)
-		reader := csv.NewReader(buf)
-		for {
-			record, err := reader.Read()
-			if err != nil {
-				close(input)
-				if err != io.EOF {
-					return err
-				}
+			if comment {
 				break
 			}
-			input <- record
 		}
-	} else {
-		// get a line reader
-		scanner := bufio.NewScanner(reader)
-		for scanner.Scan() {
-			line := scanner.Text()
-			fields := strings.Fields(line)
-			input <- fields
+
+		// ignore blank/comment lines
+		if len(fields) == 0 {
+			continue
 		}
-		close(input)
-		if err := scanner.Err(); err != nil {
-			return err
+
+		// process a line of input
+		var err error
+		switch fields[0] {
+		case "instructor:":
+			if instructor, err = data.ParseInstructor(fields); err != nil {
+				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "course:":
+			if _, err = data.ParseCourse(fields, instructor); err != nil {
+				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "room:":
+			if _, err = data.ParseRoom(fields); err != nil {
+				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "time:":
+			if time, err = data.ParseTime(fields, time); err != nil {
+				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "conflict:":
+			if err = data.ParseConflict(fields); err != nil {
+				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		default:
+			return fmt.Errorf("%q line %d: unknown line", filename, linenumber+1)
 		}
 	}
-	return <-result
+	return nil
 }
 
 func (data *DataSet) ParseRoom(fields []string) (*Room, error) {
