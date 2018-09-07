@@ -240,6 +240,11 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 			course.Slots = 3
 			continue
 		}
+		if rawTag == "studio" {
+			// 2 for TR, 3 for MWF
+			course.Slots = 23
+			continue
+		}
 
 		// handle tags
 		tag, n, err := parseBadness(rawTag)
@@ -503,6 +508,33 @@ func writeRoomByTime(out io.Writer, state *SearchState) {
                 }
             });
         }
+        var conflicts = document.querySelectorAll('b[title^="conflict:"]');
+        for (var i = 0; i < conflicts.length; i++) {
+            conflicts[i].addEventListener('mouseenter', function (event) {
+                var row = event.target.parentNode.parentNode;
+                var courses = event.target.title.split(' ');
+                for (var j = 0; j < row.cells.length; j++) {
+                    var cell = row.cells[j];
+                    var found = false;
+                    for (var k = 1; k < courses.length; k++) {
+                        if (cell.innerText.indexOf(courses[k]) >= 0) {
+                            found = true;
+                        }
+                    }
+                    if (found) {
+                        cell.style.backgroundColor = 'orange';
+                    }
+
+                }
+            });
+            conflicts[i].addEventListener('mouseleave', function (event) {
+                var row = event.target.parentNode.parentNode;
+                for (var j = 0; j < row.cells.length; j++) {
+                    var cell = row.cells[j];
+                    cell.style.backgroundColor = '';
+                }
+            });
+        }
     })();
 </script>
 `)
@@ -607,6 +639,8 @@ func save(isCsv bool, out io.Writer, data *DataSet, state *SearchState) {
 				row = append(row, "twoslots")
 			case 3:
 				row = append(row, "threeslots")
+			case 23:
+				row = append(row, "studio")
 			}
 			rows = append(rows, row)
 		}

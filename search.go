@@ -1,5 +1,12 @@
 package main
 
+// TODO: multi-slot classes need to block out instructor times as well as room times
+// TODO: multi-slot classes need to cause conflicts with other overlapping multi-slot classes
+// TODO: conflicts need to be noted symmetrically, e.g., if a => b then b => a
+// TODO: show rooms that are in use from multi-slot classes
+// TODO: gaps between class penalty should be sensitive to multi-slot classes
+// TODO: preserve original parsed input with comments, original order, etc (diffable)
+
 import (
 	"fmt"
 	"log"
@@ -28,6 +35,25 @@ type Course struct {
 	Slots      int
 	PinRoom    *Room
 	PinTime    *Time
+}
+
+// how many slots does this course
+// require if it starts at this time?
+func (c *Course) SlotsNeeded(t *Time) int {
+	if c.Slots != 23 {
+		return c.Slots
+	}
+
+	// 23 marks studio format classes,
+	// which need 3 slots on MWF and 2 on TR
+	switch t.Prefix() {
+	case "MWF":
+		return 3
+	case "TR":
+		return 2
+	default:
+		return 23
+	}
 }
 
 type Room struct {
@@ -180,7 +206,7 @@ func NewSearchState(data *DataSet, pin, pinDev float64, resort int) *SearchState
 
 					// if course requires multiple time slots, make sure this time has
 					// following slots
-					for t, remaining := time.Next, course.Slots-1; remaining > 0; remaining-- {
+					for t, remaining := time.Next, course.SlotsNeeded(time)-1; remaining > 0; remaining-- {
 						if t == nil {
 							courseTimeBadness = impossible
 							break
@@ -271,7 +297,7 @@ options:
 		if badness := state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}]; badness.N < 0 {
 			continue
 		}
-		for t, remaining := rtb.Time.Next, section.Course.Slots-1; remaining > 0; remaining-- {
+		for t, remaining := rtb.Time.Next, section.Course.SlotsNeeded(rtb.Time)-1; remaining > 0; remaining-- {
 			if badness := state.RoomTimeBadness[RoomTime{rtb.Room, t}]; badness.N < 0 {
 				continue options
 			}
@@ -361,18 +387,20 @@ func (state *SearchState) Solve() {
 			}
 		}
 
-		// place the next section
+		// block this placement out of the instructor's remaining openings and the open room times
 		state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}] = impossible
 		state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}] = impossible
-		for t, remaining := rtb.Time.Next, section.Course.Slots-1; remaining > 0; remaining-- {
+		for t, remaining := rtb.Time.Next, section.Course.SlotsNeeded(rtb.Time)-1; remaining > 0; remaining-- {
 			state.RoomTimeBadness[RoomTime{rtb.Room, t}] = impossible
 			state.InstructorTimeBadness[InstructorTime{section.Instructor, t}] = impossible
 			t = t.Next
 		}
+
+		// find the worst badness for this placement
 		for other, badness := range section.Course.Conflicts {
 			old := state.CourseTimeBadness[CourseTime{other, rtb.Time}]
 			state.CourseTimeBadness[CourseTime{other, rtb.Time}] = worst(old, badness)
-			for t, remaining := rtb.Time.Next, section.Course.Slots-1; remaining > 0; remaining-- {
+			for t, remaining := rtb.Time.Next, section.Course.SlotsNeeded(rtb.Time)-1; remaining > 0; remaining-- {
 				old := state.CourseTimeBadness[CourseTime{other, t}]
 				state.CourseTimeBadness[CourseTime{other, t}] = worst(old, badness)
 				t = t.Next
@@ -462,14 +490,14 @@ func (state *SearchState) Complain() {
 			}
 
 			gap := b.Time.Position - a.Time.Position
-			if gap < 2 {
+			if gap < 2 || gap <= a.Course.SlotsNeeded(a.Time) {
 				continue
 			}
 			bad += gap * gap
 		}
 
 		// special case: when packing everything on one day, try to spread it out a little
-		if instructor.Days == 1 {
+		if instructor.Days == 1 && len(instructor.Courses) > 3 {
 			bad = bad - 4
 			if bad < 0 {
 				bad = -bad
@@ -515,7 +543,7 @@ func (state *SearchState) Complain() {
 				s = ""
 			}
 			note := fmt.Sprintf("Added %2d because courses for %s were placed on %d day%s",
-				10*gap, instructor.Name, len(onDay), s)
+				15*gap, instructor.Name, len(onDay), s)
 			state.BadNotes = append(state.BadNotes, note)
 		}
 

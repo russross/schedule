@@ -25,6 +25,7 @@ func main() {
 	pinDev := 5.0
 	reSort := 15
 	reStart := 30 * time.Second
+	reStartBest := 60 * time.Second
 	inFile := "input.txt"
 	outPrefix := "schedule"
 
@@ -33,7 +34,8 @@ func main() {
 	flag.Float64Var(&pinDev, "pindev", pinDev, "percent chance stddev that a pin will be honored")
 	flag.IntVar(&reSort, "sort", reSort, "how often to re-sort sections to be placed")
 	flag.DurationVar(&dur, "time", dur, "total time to spend searching")
-	flag.DurationVar(&reStart, "restart", reStart, "start again after this long with no improvements")
+	flag.DurationVar(&reStart, "restart", reStart, "restart after this long since finding a local best score")
+	flag.DurationVar(&reStartBest, "restartbest", reStartBest, "restart after this long since finding the best so far")
 	flag.StringVar(&inFile, "in", inFile, "input file name")
 	flag.StringVar(&outPrefix, "out", outPrefix, "output file prefix (.txt and .html suffixes)")
 	flag.Parse()
@@ -80,7 +82,7 @@ func main() {
 	start := time.Now()
 
 	// one goroutine gathers results
-	results := make(chan *SearchState, workers)
+	results := make(chan *SearchState, workers*2)
 	resultsFinished := make(chan struct{})
 	go func() {
 		attempts, total, count := 0, 0, 0
@@ -88,6 +90,7 @@ func main() {
 		currentScore := -1
 		lastReport := start
 		lastBest := start
+		currentGenIsBest := false
 		for result := range results {
 			attempts++
 
@@ -112,6 +115,7 @@ func main() {
 			if bestScore < 0 || result.Badness < bestScore {
 				log.Printf("new best score, saving result")
 				bestScore = result.Badness
+				currentGenIsBest = true
 
 				// save the HTML format
 				fp, err := os.Create(outPrefix + ".html")
@@ -136,7 +140,7 @@ func main() {
 				lastReport = time.Now()
 			}
 
-			if time.Since(lastBest) > reStart {
+			if currentGenIsBest && time.Since(lastBest) > reStartBest || !currentGenIsBest && time.Since(lastBest) > reStart {
 				log.Printf("no improvements for %v, restarting", round(time.Since(lastBest), time.Second))
 				lastBest = time.Now()
 				currentScore = -1
@@ -145,6 +149,7 @@ func main() {
 				generation++
 				unPin(data)
 				mutex.Unlock()
+				currentGenIsBest = false
 			}
 
 			total += result.Badness
