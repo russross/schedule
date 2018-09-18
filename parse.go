@@ -4,19 +4,105 @@ import (
 	"bufio"
 	"encoding/csv"
 	"fmt"
-	"html"
 	"io"
 	"log"
-	"sort"
+	"net/http"
+	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
-func (data *DataSet) Parse(filename string, lines [][]string) error {
+//
+// data types representing input parameters
+//
+// badness ranges from 0 (good) to 99 (bad), or -1 for impossible
+//
+
+type InputData struct {
+	Rooms       []*Room
+	Times       []*Time
+	Instructors []*Instructor
+	Conflicts   []Conflict
+}
+
+type Room struct {
+	Name     string
+	Tags     []string
+	Position int
+}
+
+type Time struct {
+	Name     string
+	Tags     []string
+	Next     *Time
+	Position int
+}
+
+type Instructor struct {
+	Name     string
+	Times    []int
+	Courses  []*Course
+	Days     int
+	MinRooms int
+}
+
+type Course struct {
+	Name       string
+	Instructor *Instructor
+	Rooms      []int
+	Times      []int
+	Slots      int
+	Conflicts  map[*Course]int
+}
+
+type Conflict struct {
+	Badness int
+	Courses []*Course
+}
+
+func (t *Time) Prefix() string {
+	brk := strings.IndexAny(t.Name, "0123456789")
+	if brk < 0 {
+		return ""
+	}
+	return t.Name[:brk]
+}
+
+// how many slots does this course
+// require if it starts at this time?
+func (c *Course) SlotsNeeded(t *Time) int {
+	if c.Slots < 1 {
+		return 1
+	}
+	if c.Slots != 23 {
+		return c.Slots
+	}
+
+	// 23 marks studio format classes,
+	// which need 3 slots on MWF and 2 on TR
+	switch t.Prefix() {
+	case "MWF":
+		return 3
+	case "TR":
+		return 2
+	default:
+		return 23
+	}
+}
+
+func Parse(filename string, lines [][]string) (*InputData, error) {
+	data := new(InputData)
+
 	// recently-parsed objects for context-sensitive items
 	var instructor *Instructor
 	var time *Time
+
+	// parsing data that does not make it into the InputData struct
+	rooms := make(map[string]*Room)
+	times := make(map[string]*Time)
+	tagToRooms := make(map[string][]*Room)
+	tagToTimes := make(map[string][]*Time)
+
 	for linenumber, line := range lines {
 		var fields []string
 		for _, elt := range line {
@@ -42,98 +128,141 @@ func (data *DataSet) Parse(filename string, lines [][]string) error {
 		// process a line of input
 		var err error
 		switch fields[0] {
-		case "instructor:":
-			if instructor, err = data.ParseInstructor(fields); err != nil {
-				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
-			}
-
-		case "course:":
-			if _, err = data.ParseCourse(fields, instructor); err != nil {
-				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
-			}
-
 		case "room:":
-			if _, err = data.ParseRoom(fields); err != nil {
-				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			if _, err = data.ParseRoom(fields, rooms, times, tagToRooms, tagToTimes); err != nil {
+				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
 			}
 
 		case "time:":
-			if time, err = data.ParseTime(fields, time); err != nil {
-				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			if time, err = data.ParseTime(fields, time, rooms, times, tagToRooms, tagToTimes); err != nil {
+				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "instructor:":
+			if instructor, err = data.ParseInstructor(fields, times, tagToTimes); err != nil {
+				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "course:":
+			if _, err = data.ParseCourse(fields, instructor, rooms, times, tagToRooms, tagToTimes); err != nil {
+				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
 			}
 
 		case "conflict:":
 			if err = data.ParseConflict(fields); err != nil {
-				return fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
 			}
 
 		default:
-			return fmt.Errorf("%q line %d: unknown line", filename, linenumber+1)
+			return nil, fmt.Errorf("%q line %d: unknown line", filename, linenumber+1)
 		}
 	}
-	return nil
+	log.Printf("finding minimum possible number of rooms for each instructor")
+	for _, instructor := range data.Instructors {
+		instructor.FindMinRooms()
+	}
+
+	return data, nil
 }
 
-func (data *DataSet) ParseRoom(fields []string) (*Room, error) {
+func (data *InputData) ParseRoom(fields []string, rooms map[string]*Room, times map[string]*Time, tagToRooms map[string][]*Room, tagToTimes map[string][]*Time) (*Room, error) {
 	if len(fields) < 2 {
 		log.Printf("expected %q", "room: name tag tag tag ...")
 		return nil, fmt.Errorf("parsing error")
 	}
 	room := &Room{
 		Name:     fields[1],
-		Position: len(data.Rooms),
+		Position: len(rooms),
 	}
-	if data.Rooms[room.Name] != nil {
+	data.Rooms = append(data.Rooms, room)
+
+	if rooms[room.Name] != nil {
 		return nil, fmt.Errorf("found duplicate room")
 	}
-	if data.Times[room.Name] != nil {
+	if times[room.Name] != nil {
 		return nil, fmt.Errorf("found room with name matching time name")
 	}
-	data.Rooms[room.Name] = room
+	if tagToTimes[room.Name] != nil {
+		return nil, fmt.Errorf("found room with name matching time tag")
+	}
+	if tagToRooms[room.Name] != nil {
+		return nil, fmt.Errorf("found room with name matching room tag")
+	}
+	rooms[room.Name] = room
 	for _, tag := range fields[2:] {
+		if rooms[tag] != nil {
+			return nil, fmt.Errorf("found room tag with name matching room name")
+		}
+		if times[tag] != nil {
+			return nil, fmt.Errorf("found room tag with name matching time name")
+		}
+		if tagToTimes[tag] != nil {
+			return nil, fmt.Errorf("found room tag with name matching time tag")
+		}
 		room.Tags = append(room.Tags, tag)
-		data.TagToRooms[tag] = append(data.TagToRooms[tag], room)
+		tagToRooms[tag] = append(tagToRooms[tag], room)
 	}
 
 	return room, nil
 }
 
-func (data *DataSet) ParseTime(fields []string, prev *Time) (*Time, error) {
+func (data *InputData) ParseTime(fields []string, prev *Time, rooms map[string]*Room, times map[string]*Time, tagToRooms map[string][]*Room, tagToTimes map[string][]*Time) (*Time, error) {
 	if len(fields) == 1 {
 		return nil, nil
 	}
 	time := &Time{
 		Name:     fields[1],
-		Position: len(data.Times),
+		Position: len(times),
 	}
-	if data.Times[time.Name] != nil {
+	data.Times = append(data.Times, time)
+
+	if times[time.Name] != nil {
 		return nil, fmt.Errorf("found duplicate time")
 	}
-	if data.Rooms[time.Name] != nil {
+	if rooms[time.Name] != nil {
 		return nil, fmt.Errorf("found time with name matching room name")
 	}
-	data.Times[time.Name] = time
+	if tagToTimes[time.Name] != nil {
+		return nil, fmt.Errorf("found time with name matching time tag")
+	}
+	if tagToRooms[time.Name] != nil {
+		return nil, fmt.Errorf("found time with name matching room tag")
+	}
+	times[time.Name] = time
 	if prev != nil {
 		prev.Next = time
 	}
 	for _, tag := range fields[2:] {
+		if rooms[tag] != nil {
+			return nil, fmt.Errorf("found time tag with name matching room name")
+		}
+		if times[tag] != nil {
+			return nil, fmt.Errorf("found time tag with name matching time name")
+		}
+		if tagToRooms[tag] != nil {
+			return nil, fmt.Errorf("found time tag with name matching room tag")
+		}
 		time.Tags = append(time.Tags, tag)
-		data.TagToTimes[tag] = append(data.TagToTimes[tag], time)
+		tagToTimes[tag] = append(tagToTimes[tag], time)
 	}
 
 	return time, nil
 }
 
-func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
+func (data *InputData) ParseInstructor(fields []string, times map[string]*Time, tagToTimes map[string][]*Time) (*Instructor, error) {
 	if len(fields) < 3 {
-		log.Printf("expected %q", "instructor: name time time ...")
+		log.Printf("expected %q", "instructor: name time time ... [oneday|twodays]")
 		return nil, fmt.Errorf("parsing error")
 	}
 	instructor := &Instructor{
 		Name:  fields[1],
-		Times: make(map[*Time]Badness),
+		Times: make([]int, len(times)),
 	}
-	data.Instructors[instructor.Name] = instructor
+	for i := 0; i < len(instructor.Times); i++ {
+		// all time slots default to impossible
+		instructor.Times[i] = -1
+	}
+	data.Instructors = append(data.Instructors, instructor)
 
 	// parse available times
 	for _, rawTag := range fields[2:] {
@@ -147,25 +276,24 @@ func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
 			continue
 		}
 
-		tag, n, err := parseBadness(rawTag)
+		tag, badness, err := parseBadness(rawTag)
 		if err != nil {
 			log.Printf("when parsing times for instructor %s", instructor.Name)
 			log.Printf("expected time of form %q but found %q", "time:badness", tag)
 			return nil, err
 		}
-		badness := Badness{n, "instructor preference"}
 
 		hits := 0
-		if time, present := data.Times[tag]; present {
-			if badness2, present := instructor.Times[time]; !present || badness.N > badness2.N {
-				instructor.Times[time] = badness
+		if time, present := times[tag]; present {
+			if existing := instructor.Times[time.Position]; existing < 0 || badness > existing {
+				instructor.Times[time.Position] = badness
 			}
 			hits++
 		}
-		if times, present := data.TagToTimes[tag]; present {
+		if times, present := tagToTimes[tag]; present {
 			for _, time := range times {
-				if badness2, present := instructor.Times[time]; !present || badness.N > badness2.N {
-					instructor.Times[time] = badness
+				if existing := instructor.Times[time.Position]; existing < 0 || badness > existing {
+					instructor.Times[time.Position] = badness
 				}
 			}
 			hits++
@@ -179,7 +307,13 @@ func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
 		}
 	}
 
-	if len(instructor.Times) == 0 {
+	valid := 0
+	for _, elt := range instructor.Times {
+		if elt >= 0 {
+			valid++
+		}
+	}
+	if valid == 0 {
 		log.Printf("no valid times found for instructor %q", instructor.Name)
 		return nil, fmt.Errorf("no valid times found for instructor")
 	}
@@ -187,7 +321,7 @@ func (data *DataSet) ParseInstructor(fields []string) (*Instructor, error) {
 	return instructor, nil
 }
 
-func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Course, error) {
+func (data *InputData) ParseCourse(fields []string, instructor *Instructor, rooms map[string]*Room, times map[string]*Time, tagToRooms map[string][]*Room, tagToTimes map[string][]*Time) (*Course, error) {
 	if len(fields) < 2 {
 		log.Printf("expected %q", "course: name tag tag tag ...")
 		return nil, fmt.Errorf("parsing error")
@@ -198,39 +332,21 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 	course := &Course{
 		Name:       fields[1],
 		Instructor: instructor,
-		Rooms:      make(map[*Room]Badness),
-		Times:      make(map[*Time]Badness),
-		Conflicts:  make(map[*Course]Badness),
+		Rooms:      make([]int, len(rooms)),
+		Times:      make([]int, len(times)),
+		Conflicts:  make(map[*Course]int),
+	}
+	for i := 0; i < len(course.Rooms); i++ {
+		// all rooms default to impossible
+		course.Rooms[i] = -1
+	}
+	for i := 0; i < len(course.Times); i++ {
+		// all times default to impossible
+		course.Times[i] = -1
 	}
 	instructor.Courses = append(instructor.Courses, course)
 
 	for _, rawTag := range fields[2:] {
-		// handle pins
-		if strings.HasPrefix(rawTag, "pin(") && strings.HasSuffix(rawTag, ")") {
-			parts := strings.Split(rawTag[len("pin("):len(rawTag)-len(")")], ",")
-			if len(parts) != 2 {
-				log.Printf("pin must be of the form pin(room,time): found %q", rawTag)
-				return nil, fmt.Errorf("parsing error")
-			}
-			if room, present := data.Rooms[parts[0]]; present {
-				course.PinRoom = room
-			} else if parts[0] == "" {
-				// okay to omit the room
-			} else {
-				log.Printf("pinned room %q not found", parts[0])
-				return nil, fmt.Errorf("unknown room")
-			}
-			if time, present := data.Times[parts[1]]; present {
-				course.PinTime = time
-			} else if parts[1] == "" {
-				// okay to omit the time
-			} else {
-				log.Printf("pinned time %q not found", parts[1])
-				return nil, fmt.Errorf("unknown time")
-			}
-			continue
-		}
-
 		// handle multiple slots
 		if rawTag == "twoslots" {
 			course.Slots = 2
@@ -247,37 +363,36 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 		}
 
 		// handle tags
-		tag, n, err := parseBadness(rawTag)
+		tag, badness, err := parseBadness(rawTag)
 		if err != nil {
 			return nil, err
 		}
-		badness := Badness{n, "course preference"}
 
 		hits := 0
-		if room, present := data.Rooms[tag]; present {
-			if badness2, present := course.Rooms[room]; !present || badness.N > badness2.N {
-				course.Rooms[room] = badness
+		if room, present := rooms[tag]; present {
+			if existing := course.Rooms[room.Position]; existing < 0 || badness > existing {
+				course.Rooms[room.Position] = badness
 			}
 			hits++
 		}
-		if time, present := data.Times[tag]; present {
-			if badness2, present := course.Times[time]; !present || badness.N > badness2.N {
-				course.Times[time] = badness
+		if time, present := times[tag]; present {
+			if existing := course.Times[time.Position]; existing < 0 || badness > existing {
+				course.Times[time.Position] = badness
 			}
 			hits++
 		}
-		if rooms, present := data.TagToRooms[tag]; present {
+		if rooms, present := tagToRooms[tag]; present {
 			for _, room := range rooms {
-				if badness2, present := course.Rooms[room]; !present || badness.N > badness2.N {
-					course.Rooms[room] = badness
+				if existing := course.Rooms[room.Position]; existing < 0 || badness > existing {
+					course.Rooms[room.Position] = badness
 				}
 			}
 			hits++
 		}
-		if times, present := data.TagToTimes[tag]; present {
+		if times, present := tagToTimes[tag]; present {
 			for _, time := range times {
-				if badness2, present := course.Times[time]; !present || badness.N > badness2.N {
-					course.Times[time] = badness
+				if existing := course.Times[time.Position]; existing < 0 || badness > existing {
+					course.Times[time.Position] = badness
 				}
 			}
 			hits++
@@ -291,25 +406,50 @@ func (data *DataSet) ParseCourse(fields []string, instructor *Instructor) (*Cour
 		}
 	}
 
-	if len(course.Rooms) == 0 {
+	valid := 0
+	for _, badness := range course.Rooms {
+		if badness >= 0 {
+			valid++
+		}
+	}
+	if valid == 0 {
 		return nil, fmt.Errorf("no rooms found for course %s", course.Name)
+	}
+
+	// if the course does not specify any times, then we leave its list as nil
+	// in which case the instructor times are all that matter
+	hasTimes := false
+	for _, badness := range course.Times {
+		if badness >= 0 {
+			hasTimes = true
+			break
+		}
+	}
+	if !hasTimes {
+		course.Times = nil
 	}
 
 	return course, nil
 }
 
-func (data *DataSet) ParseConflict(fields []string) error {
+func (data *InputData) ParseConflict(fields []string) error {
 	if len(fields) < 4 {
 		log.Printf("expected %q", "conflict: badness course1 course2 ...")
 		return fmt.Errorf("parsing error")
 	}
 
-	n, err := strconv.Atoi(fields[1])
+	badness, err := strconv.Atoi(fields[1])
 	if err != nil {
 		return fmt.Errorf("error parsing badness value %q", fields[1])
 	}
-	if n < 0 || n >= 100 {
-		n = -1
+	if badness < -1 {
+		return fmt.Errorf("badness of a conflict cannot be less than -1")
+	}
+	if badness > 100 {
+		return fmt.Errorf("badness of a conflict cannot be greater than 100")
+	}
+	if badness == 100 {
+		badness = -1
 	}
 
 	var courses []*Course
@@ -332,11 +472,6 @@ func (data *DataSet) ParseConflict(fields []string) error {
 			return fmt.Errorf("course %q not found in conflict: line", tag)
 		}
 	}
-	s := "conflict:"
-	for _, course := range courses {
-		s += " " + course.Name
-	}
-	badness := Badness{n, s}
 
 	for _, course := range courses {
 		for _, elt := range courses {
@@ -344,9 +479,7 @@ func (data *DataSet) ParseConflict(fields []string) error {
 				continue
 			}
 
-			if badness2, present := course.Conflicts[elt]; present && badness2.N > badness.N {
-				course.Conflicts[elt] = badness2
-			} else {
+			if existing, present := course.Conflicts[elt]; !present || badness > existing {
 				course.Conflicts[elt] = badness
 			}
 		}
@@ -367,8 +500,8 @@ func parseBadness(tag string) (string, int, error) {
 		if err != nil {
 			return "", 0, fmt.Errorf("error parsing badness value in %q", tag)
 		}
-		if badness < 0 {
-			return "", 0, fmt.Errorf("badness must be >= 0 in %q", tag)
+		if badness < 0 || badness > 100 {
+			return "", 0, fmt.Errorf("badness must be between 0 and 100 in %q", tag)
 		}
 		return parts[0], badness, nil
 	default:
@@ -376,437 +509,136 @@ func parseBadness(tag string) (string, int, error) {
 	}
 }
 
-func writeRoomByTime(out io.Writer, state *SearchState) {
-	w := bufio.NewWriter(out)
-	defer w.Flush()
+func fetchFile(filename string) ([][]string, error) {
+	var lines [][]string
 
-	// collect a list of rooms and times and sort them by name
-	// also, make an index to look up a course by its room and time
-	var rooms []*Room
-	var times []*Time
-	roomKnown := make(map[*Room]bool)
-	timeKnown := make(map[*Time]bool)
-	byRoomTime := make(map[string]*CoursePlacement)
-	for _, elt := range state.Schedule {
-		if !roomKnown[elt.Room] {
-			roomKnown[elt.Room] = true
-			rooms = append(rooms, elt.Room)
+	var reader io.Reader
+	isCsv := false
+	if strings.HasPrefix(filename, "http:") || strings.HasPrefix(filename, "https:") {
+		const docsSuffix = "/edit?usp=sharing"
+		if strings.HasSuffix(filename, docsSuffix) {
+			filename = filename[:len(filename)-len(docsSuffix)] + "/export?format=csv"
+			isCsv = true
 		}
-		if !timeKnown[elt.Time] {
-			timeKnown[elt.Time] = true
-			times = append(times, elt.Time)
+		log.Printf("downloading input URL %s", filename)
+		res, err := http.Get(filename)
+		if err != nil {
+			return nil, err
 		}
-		byRoomTime[elt.Room.Name+":"+elt.Time.Name] = elt
-	}
-	sort.Slice(rooms, func(a, b int) bool {
-		return rooms[a].Position < rooms[b].Position
-	})
-	sort.Slice(times, func(a, b int) bool {
-		return times[a].Position < times[b].Position
-	})
-
-	fmt.Fprintf(w, "<!DOCTYPE html>\n")
-	fmt.Fprintf(w, "<html lang=\"en\">\n")
-	fmt.Fprintf(w, "<head>\n")
-	fmt.Fprintf(w, "<title>Schedule of rooms by time</title>\n")
-	fmt.Fprintf(w, "<style>\n")
-	fmt.Fprintf(w, "  table, td { border: 1px solid darkgray; }\n")
-	fmt.Fprintf(w, "  span, b { cursor: pointer; }\n")
-	fmt.Fprintf(w, "</style>\n")
-	fmt.Fprintf(w, "</head>\n")
-	fmt.Fprintf(w, "<body>\n")
-	fmt.Fprintf(w, "<table>\n")
-	fmt.Fprintf(w, "<thead>\n")
-	fmt.Fprintf(w, "  <tr>\n")
-	fmt.Fprintf(w, "    <td>&nbsp;</td>\n")
-	for _, room := range rooms {
-		fmt.Fprintf(w, "    <td>%s</td>\n", html.EscapeString(room.Name))
-	}
-	fmt.Fprintf(w, "  </tr>\n")
-	fmt.Fprintf(w, "</thead>\n")
-	fmt.Fprintf(w, "<tbody>\n")
-	for _, time := range times {
-		fmt.Fprintf(w, "  <tr>\n")
-		fmt.Fprintf(w, "    <td>%s</td>\n", html.EscapeString(time.Name))
-		for _, room := range rooms {
-			placement := byRoomTime[room.Name+":"+time.Name]
-			if placement == nil {
-				fmt.Fprintf(w, "    <td>&nbsp</td>\n")
-			} else if placement.Badness.N > 0 {
-				fmt.Fprintf(w, "    <td>%s<br>%s<br><b title=\"%s\">badness %d</b></td>\n",
-					html.EscapeString(placement.Course.Instructor.Name),
-					html.EscapeString(placement.Course.Name),
-					html.EscapeString(placement.Badness.Message),
-					placement.Badness.N)
-			} else {
-				fmt.Fprintf(w, "    <td>%s<br>%s</td>\n",
-					html.EscapeString(placement.Course.Instructor.Name),
-					html.EscapeString(placement.Course.Name))
-			}
+		defer res.Body.Close()
+		reader = res.Body
+	} else {
+		log.Printf("reading input file %s", filename)
+		fp, err := os.Open(filename)
+		if err != nil {
+			return nil, err
 		}
-		fmt.Fprintf(w, "  </tr>\n")
+		defer fp.Close()
+		reader = fp
+		isCsv = strings.HasSuffix(filename, ".csv")
 	}
-	fmt.Fprintf(w, "</tbody>\n")
-	fmt.Fprintf(w, "</table>\n")
-	fmt.Fprintf(w, "<p>Schedule generated %s with badness %d</p>", time.Now().Format("Jan _2, 2006 at 3:04 PM"), state.Badness)
-
-	if len(state.BadNotes) > 0 {
-		sort.Sort(sort.Reverse(sort.StringSlice(state.BadNotes)))
-		fmt.Fprintf(w, "<ul>\n")
-		for _, s := range state.BadNotes {
-			fmt.Fprintf(w, "  <li>%s</li>\n", html.EscapeString(strings.Replace(s, "  ", " ", -1)))
-		}
-		fmt.Fprintf(w, "</ul>\n")
-	}
-
-	fmt.Fprintf(w, `<script>
-    (function () {
-        var numbers = {};
-        var next = 1;
-        var tds = document.getElementsByTagName('td');
-        var notes = document.getElementsByTagName('li');
-        for (var i = 0; i < notes.length; i++) {
-            notes[i].innerHTML = '<span>' + notes[i].innerHTML + '</span>';
-        }
-        for (var i = 0; i < tds.length; i++) {
-            var parts = tds[i].innerHTML.split('<br>');
-            if (parts.length > 1) {
-                for (var j = 0; j < parts.length && j < 2; j++) {
-                    if (!numbers.hasOwnProperty(parts[j])) {
-                        for (var k = 0; k < notes.length; k++) {
-                            var text = notes[k].innerHTML;
-                            var index = text.indexOf(parts[j]);
-                            if (index >= 0) {
-                                text = text.substring(0, index) +
-                                    '<span class="number' + next + '">' + parts[j] + '</span>' +
-                                    text.substring(index + parts[j].length);
-                                notes[k].innerHTML = text;
-                            }
-                        }
-
-                        numbers[parts[j]] = next;
-                        next++;
-                    }
-                    var n = numbers[parts[j]];
-                    parts[j] = '<span class="number' + n + '">' + parts[j] + '</span>';
-                }
-                tds[i].innerHTML = parts.join('<br>');
-            }
-        }
-        var spans = document.getElementsByTagName('span');
-        for (var i = 0; i < spans.length; i++) {
-            spans[i].addEventListener('mouseenter', function (event) {
-                var matches = document.getElementsByClassName(event.target.className);
-                for (var j = 0; j < matches.length; j++) {
-                    matches[j].parentElement.style.backgroundColor = 'palegreen';
-                }
-            });
-            spans[i].addEventListener('mouseleave', function (event) {
-                var matches = document.getElementsByClassName(event.target.className);
-                for (var j = 0; j < matches.length; j++) {
-                    matches[j].parentElement.style.backgroundColor = '';
-                }
-            });
-        }
-        var conflicts = document.querySelectorAll('b[title^="conflict:"]');
-        for (var i = 0; i < conflicts.length; i++) {
-            conflicts[i].addEventListener('mouseenter', function (event) {
-                var row = event.target.parentNode.parentNode;
-                var courses = event.target.title.split(' ');
-                for (var j = 0; j < row.cells.length; j++) {
-                    var cell = row.cells[j];
-                    var found = false;
-                    for (var k = 1; k < courses.length; k++) {
-                        if (cell.innerText.indexOf(courses[k]) >= 0) {
-                            found = true;
-                        }
-                    }
-                    if (found) {
-                        cell.style.backgroundColor = 'orange';
-                    }
-
-                }
-            });
-            conflicts[i].addEventListener('mouseleave', function (event) {
-                var row = event.target.parentNode.parentNode;
-                for (var j = 0; j < row.cells.length; j++) {
-                    var cell = row.cells[j];
-                    cell.style.backgroundColor = '';
-                }
-            });
-        }
-    })();
-</script>
-`)
-	fmt.Fprintf(w, "</body>\n")
-	fmt.Fprintf(w, "</html>\n")
-}
-
-func save(isCsv bool, out io.Writer, data *DataSet, state *SearchState) {
-	// map courses to assigned times
-	courseToPlacement := make(map[*Course]*CoursePlacement)
-	if state != nil {
-		for _, placement := range state.Schedule {
-			courseToPlacement[placement.Course] = placement
-		}
-	}
-
-	var rows [][]string
-
-	if state != nil {
-		rows = append(rows, []string{fmt.Sprintf("// score %d", state.Badness)})
-	}
-
-	// rooms
-	rows = append(rows, []string{"// rooms"})
-	var rooms []*Room
-	for _, elt := range data.Rooms {
-		rooms = append(rooms, elt)
-	}
-	sort.Slice(rooms, func(a, b int) bool {
-		return rooms[a].Position < rooms[b].Position
-	})
-	for _, room := range rooms {
-		row := []string{"room:", room.Name}
-		row = append(row, room.Tags...)
-		rows = append(rows, row)
-	}
-
-	// times
-	rows = append(rows, []string{""})
-	rows = append(rows, []string{"// times"})
-	var times []*Time
-	for _, elt := range data.Times {
-		times = append(times, elt)
-	}
-	sort.Slice(times, func(a, b int) bool {
-		return times[a].Position < times[b].Position
-	})
-	var prev *Time
-	for i, time := range times {
-		if i > 0 && (prev == nil || prev.Next != time) {
-			rows = append(rows, []string{"time:"})
-		}
-		prev = time
-		row := []string{"time:", time.Name}
-		row = append(row, time.Tags...)
-		rows = append(rows, row)
-	}
-
-	// instructors and courses
-	rows = append(rows, []string{""})
-	rows = append(rows, []string{"// instructors and courses"})
-	var instructors []*Instructor
-	for _, elt := range data.Instructors {
-		instructors = append(instructors, elt)
-	}
-	sort.Slice(instructors, func(a, b int) bool {
-		return instructors[a].Name < instructors[b].Name
-	})
-	for i, instructor := range instructors {
-		if i > 0 {
-			rows = append(rows, []string{""})
-		}
-		row := []string{"instructor:", instructor.Name}
-		row = append(row, contractTimes(instructor.Times, data)...)
-		switch instructor.Days {
-		case 1:
-			row = append(row, "oneday")
-		case 2:
-			row = append(row, "twodays")
-		}
-		rows = append(rows, row)
-
-		// this instructor's courses
-		for _, course := range instructor.Courses {
-			row := []string{"course:", course.Name}
-
-			// is the course pinned?
-			if placement, present := courseToPlacement[course]; present {
-				if placement.Badness.N > 0 {
-					msg := fmt.Sprintf("// placing %s here added %d to the badness score: %s",
-						course.Name, placement.Badness.N, placement.Badness.Message)
-					rows = append(rows, []string{msg})
-				}
-				row = append(row, fmt.Sprintf("pin(%s,%s)", placement.Room.Name, placement.Time.Name))
-			}
-			row = append(row, contractRooms(course.Rooms, data)...)
-			if len(course.Times) > 0 {
-				row = append(row, contractTimes(course.Times, data)...)
-			}
-			switch course.Slots {
-			case 2:
-				row = append(row, "twoslots")
-			case 3:
-				row = append(row, "threeslots")
-			case 23:
-				row = append(row, "studio")
-			}
-			rows = append(rows, row)
-		}
-	}
-
-	// conflicts
-	rows = append(rows, []string{""})
-	rows = append(rows, []string{"// conflicts"})
-	for _, conflict := range data.Conflicts {
-		used := make(map[string]bool)
-		row := []string{"conflict:", fmt.Sprintf("%d", conflict.Badness.N)}
-		for _, course := range conflict.Courses {
-			if used[course.Name] {
-				continue
-			}
-			used[course.Name] = true
-			row = append(row, course.Name)
-		}
-		rows = append(rows, row)
-	}
-
-	// write data
-	buf := bufio.NewWriter(out)
-	defer buf.Flush()
 
 	if isCsv {
-		w := csv.NewWriter(buf)
-		defer w.Flush()
-
-		// find longest row
-		longest := 0
-		for _, row := range rows {
-			if len(row) > longest {
-				longest = len(row)
+		buf := bufio.NewReader(reader)
+		reader := csv.NewReader(buf)
+		for {
+			record, err := reader.Read()
+			if err != nil {
+				if err != io.EOF {
+					return nil, err
+				}
+				break
 			}
-		}
-
-		for _, row := range rows {
-			for len(row) < longest {
-				row = append(row, "")
-			}
-			w.Write(row)
+			lines = append(lines, record)
 		}
 	} else {
-		for _, row := range rows {
-			s := strings.Join(row, " ")
-			buf.WriteString(s)
-			buf.WriteString("\n")
+		// get a line reader
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fields := strings.Fields(line)
+			lines = append(lines, fields)
+		}
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return lines, nil
+}
+
+// find the minimum set of rooms necessary for an instructor
+// to cover all assigned courses.
+// note: this is the hitting set problem, which is np-complete.
+// our n is the number of courses a single instructor teaches, so
+// we just brute force it
+func (instructor *Instructor) FindMinRooms() {
+	// get a complete list of rooms the instructor can use
+	allPossibleRooms := make(map[int]struct{})
+	for _, course := range instructor.Courses {
+		for position, badness := range course.Rooms {
+			if badness >= 0 {
+				allPossibleRooms[position] = struct{}{}
+			}
+		}
+	}
+	var roomPositions []int
+	for position := range allPossibleRooms {
+		roomPositions = append(roomPositions, position)
+	}
+
+	// note: if the loop ends without finding a solution with
+	// fewer than the max number of rooms, it will leave the
+	// result at the max number without bothering to prove it
+minRoomsLoop:
+	for instructor.MinRooms = 1; instructor.MinRooms < len(instructor.Courses); instructor.MinRooms++ {
+		n, k := len(roomPositions), instructor.MinRooms
+		set := nChooseKInit(n, k)
+
+	setLoop:
+		for nChooseKNext(set, n, k) {
+		courseLoop:
+			for _, course := range instructor.Courses {
+				for _, index := range set {
+					if course.Rooms[roomPositions[index]] >= 0 {
+						continue courseLoop
+					}
+				}
+				continue setLoop
+			}
+
+			// success!
+			break minRoomsLoop
 		}
 	}
 }
 
-func contractRooms(in map[*Room]Badness, data *DataSet) []string {
-	available := make(map[*Room]Badness)
-	for k, v := range in {
-		available[k] = v
+func nChooseKInit(n, k int) []int {
+	if k > n || n < 1 {
+		panic("n choose k got bad inputs")
 	}
-	var out []string
-
-	var tags []string
-	for tag := range data.TagToRooms {
-		tags = append(tags, tag)
+	lst := make([]int, k)
+	for i := range lst {
+		lst[i] = -1
 	}
-	sort.Slice(tags, func(a, b int) bool {
-		return len(data.TagToRooms[tags[a]]) > len(data.TagToRooms[tags[b]])
-	})
-
-tagloop:
-	for _, tag := range tags {
-		rooms := data.TagToRooms[tag]
-		n := -1
-		for i, room := range rooms {
-			badness, present := available[room]
-			if !present {
-				continue tagloop
-			}
-			if i == 0 {
-				n = badness.N
-			}
-			if n != badness.N {
-				continue tagloop
-			}
-		}
-
-		// a full matching set
-		out = append(out, joinTagBadness(tag, n))
-
-		for _, room := range rooms {
-			delete(available, room)
-		}
-	}
-
-	// add the remaining rooms as-is
-	var otherRooms []*Room
-	for room, _ := range available {
-		otherRooms = append(otherRooms, room)
-	}
-	sort.Slice(otherRooms, func(a, b int) bool {
-		return otherRooms[a].Position < otherRooms[b].Position
-	})
-	for _, room := range otherRooms {
-		out = append(out, joinTagBadness(room.Name, available[room].N))
-	}
-
-	return out
+	return lst
 }
 
-func contractTimes(in map[*Time]Badness, data *DataSet) []string {
-	available := make(map[*Time]Badness)
-	for k, v := range in {
-		available[k] = v
-	}
-	var out []string
-
-	// sort tags biggest to smallest
-	var tags []string
-	for tag := range data.TagToTimes {
-		tags = append(tags, tag)
-	}
-	sort.Slice(tags, func(a, b int) bool {
-		return len(data.TagToTimes[tags[a]]) > len(data.TagToTimes[tags[b]])
-	})
-
-tagloop:
-	for _, tag := range tags {
-		times := data.TagToTimes[tag]
-		n := -1
-		for i, time := range times {
-			badness, present := available[time]
-			if !present {
-				continue tagloop
-			}
-			if i == 0 {
-				n = badness.N
-			}
-			if n != badness.N {
-				continue tagloop
-			}
+func nChooseKNext(lst []int, n, k int) bool {
+	if lst[0] == -1 {
+		for i := 0; i < k; i++ {
+			lst[i] = i
 		}
-
-		// a full matching set
-		out = append(out, joinTagBadness(tag, n))
-
-		for _, time := range times {
-			delete(available, time)
+		return true
+	}
+	for i := 0; i < k; i++ {
+		elt := lst[k-1-i]
+		if elt < n-1-i {
+			for j := k - 1 - i; j < k; j++ {
+				elt++
+				lst[j] = elt
+			}
+			return true
 		}
 	}
-
-	// add the remaining times as-is
-	var otherTimes []*Time
-	for time, _ := range available {
-		otherTimes = append(otherTimes, time)
-	}
-	sort.Slice(otherTimes, func(a, b int) bool {
-		return otherTimes[a].Position < otherTimes[b].Position
-	})
-	for _, time := range otherTimes {
-		out = append(out, joinTagBadness(time.Name, available[time].N))
-	}
-
-	return out
-}
-
-func joinTagBadness(tag string, badness int) string {
-	if badness == 0 {
-		return tag
-	}
-	return fmt.Sprintf("%s:%d", tag, badness)
+	return false
 }

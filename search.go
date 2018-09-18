@@ -1,580 +1,285 @@
 package main
 
-// TODO: multi-slot classes need to block out instructor times as well as room times
-// TODO: multi-slot classes need to cause conflicts with other overlapping multi-slot classes
-// TODO: conflicts need to be noted symmetrically, e.g., if a => b then b => a
-// TODO: show rooms that are in use from multi-slot classes
-// TODO: gaps between class penalty should be sensitive to multi-slot classes
-// TODO: preserve original parsed input with comments, original order, etc (diffable)
-
 import (
-	"fmt"
 	"log"
 	"math/rand"
 	"sort"
-	"strings"
-	"time"
 )
 
-// data types for parsing and processing input data
-
-type Instructor struct {
-	Name     string
-	Times    map[*Time]Badness
-	Courses  []*Course
-	Days     int
-	MinRooms int
-}
-
-type Course struct {
-	Name       string
-	Instructor *Instructor
-	Rooms      map[*Room]Badness
-	Times      map[*Time]Badness
-	Conflicts  map[*Course]Badness
-	Slots      int
-	PinRoom    *Room
-	PinTime    *Time
-}
-
-// how many slots does this course
-// require if it starts at this time?
-func (c *Course) SlotsNeeded(t *Time) int {
-	if c.Slots != 23 {
-		return c.Slots
-	}
-
-	// 23 marks studio format classes,
-	// which need 3 slots on MWF and 2 on TR
-	switch t.Prefix() {
-	case "MWF":
-		return 3
-	case "TR":
-		return 2
-	default:
-		return 23
-	}
-}
-
-type Room struct {
-	Name     string
-	Tags     []string
-	Position int
-}
-
-type Time struct {
-	Name     string
-	Tags     []string
-	Next     *Time
-	Position int
-}
-
-func (t *Time) Prefix() string {
-	brk := strings.IndexAny(t.Name, "0123456789")
-	if brk < 0 {
-		return ""
-	}
-	return t.Name[:brk]
-}
-
-type Badness struct {
-	N       int
-	Message string
-}
-
-var impossible = Badness{N: -1, Message: ""}
-
-type Conflict struct {
-	Badness Badness
-	Courses []*Course
-}
-
-type DataSet struct {
-	Instructors map[string]*Instructor
-	Rooms       map[string]*Room
-	Times       map[string]*Time
-	TagToRooms  map[string][]*Room
-	TagToTimes  map[string][]*Time
-	Conflicts   []Conflict
-}
-
-// data types to represent a search in progress
-type RoomTimeBadness struct {
-	Room    *Room
-	Time    *Time
-	Badness Badness
-}
-
+// a Section is used during schedule creation
 type Section struct {
-	Instructor      *Instructor
-	Course          *Course
-	RoomTimeOptions []RoomTimeBadness
+	Course    *Course
+	RoomTimes [][]int
+	Tickets   int
 }
 
-type InstructorTime struct {
-	Instructor *Instructor
-	Time       *Time
-}
-
-type CourseTime struct {
+// A Placement represents a course assigned to a room and time
+type Placement struct {
 	Course *Course
-	Time   *Time
+	Room   int
+	Time   int
 }
 
-type RoomTime struct {
-	Room *Room
-	Time *Time
+// A Schedule is a two-dimensional view of the placed sections,
+// ready to be scored and displayed.
+type Schedule struct {
+	RoomTimes [][]Cell
+	Badness   int
 }
 
-type SearchState struct {
-	Data                  *DataSet
-	Sections              []*Section
-	InstructorTimeBadness map[InstructorTime]Badness
-	CourseTimeBadness     map[CourseTime]Badness
-	RoomTimeBadness       map[RoomTime]Badness
-	PinMean               float64
-	PinStddev             float64
-	ReSort                int
-	Badness               int
-	Schedule              []*CoursePlacement
-	Generation            int
-	BadNotes              []string
+type Cell struct {
+	Instructor  string
+	Course      string
+	IsSpillover bool
 }
 
-type CoursePlacement struct {
-	Course  *Course
-	Room    *Room
-	Time    *Time
-	Badness Badness
-}
-
-func NewSearchState(data *DataSet, pin, pinDev float64, resort int) *SearchState {
-	state := &SearchState{
-		Data: data,
-		InstructorTimeBadness: make(map[InstructorTime]Badness),
-		CourseTimeBadness:     make(map[CourseTime]Badness),
-		RoomTimeBadness:       make(map[RoomTime]Badness),
-		PinMean:               pin,
-		PinStddev:             pinDev,
-		ReSort:                resort,
-	}
-
-	// fill in RoomTimeBadness
-	for _, room := range data.Rooms {
-		for _, time := range data.Times {
-			state.RoomTimeBadness[RoomTime{room, time}] = Badness{0, ""}
-		}
-	}
-
-	// fill in InstructorTimeBadness
+func (data *InputData) MakeSectionList() []*Section {
+	var sections []*Section
 	for _, instructor := range data.Instructors {
-		// start with impossible then correct it for available slots
-		for _, time := range data.Times {
-			state.InstructorTimeBadness[InstructorTime{instructor, time}] = impossible
-		}
-		for time, badness := range instructor.Times {
-			state.InstructorTimeBadness[InstructorTime{instructor, time}] = badness
-		}
-
-		// fill in CourseTimeBadness
-		// and prepare RoomTimeBadness list for the Section
 		for _, course := range instructor.Courses {
-			// start with impossible, correct it for available slots later (see below)
-			for _, time := range data.Times {
-				state.CourseTimeBadness[CourseTime{course, time}] = impossible
+			section := &Section{
+				Course:    course,
+				RoomTimes: make([][]int, len(data.Rooms)),
+				Tickets:   0,
+			}
+			for i := range section.RoomTimes {
+				section.RoomTimes[i] = make([]int, len(data.Times))
+			}
+			sections = append(sections, section)
+
+			// in order for a time slot to be suitable:
+			// * the start slot must be okay for the course OR the course must not specify times
+			// * all slots the course occupies must be okay for the instructor
+			//
+			// the badness is the sum of the worst badness value from each slot used (capped at 99)
+			var courseTimes []int
+		timeLoop:
+			for i := range data.Times {
+				// the course must either explictly allow this start time, or have no time preferences
+				if len(course.Times) > 0 && course.Times[i] < 0 {
+					courseTimes = append(courseTimes, -1)
+					continue timeLoop
+				}
+
+				// there must be enough slots starting at this time
+				// and the instructor must be available for all of them
+				slotsNeeded := course.SlotsNeeded(data.Times[i])
+				if i+slotsNeeded > len(data.Times) {
+					// this would run past the last time slot that exists
+					courseTimes = append(courseTimes, -1)
+					continue timeLoop
+				}
+				badness := 0
+				for j := 0; j < slotsNeeded; j++ {
+					if j+1 < slotsNeeded && data.Times[i+j].Next != data.Times[i+j+1] {
+						// not enough time slots in a row to accomodate this course
+						courseTimes = append(courseTimes, -1)
+						continue timeLoop
+					}
+					if instructor.Times[i+j] < 0 {
+						// the instructor cannot teach at this time
+						courseTimes = append(courseTimes, -1)
+						continue timeLoop
+					}
+					badness += instructor.Times[i+j]
+				}
+
+				// badness caps at 99
+				if badness > 99 {
+					badness = 99
+				}
+
+				// which is worse: the course preferences for starting this course at this time
+				// or instructor preferences for teaching in all of the required slots
+				if len(course.Times) > 0 && course.Times[i] > badness {
+					badness = course.Times[i]
+				}
+
+				courseTimes = append(courseTimes, badness)
 			}
 
-			// record available room/time pairs for this course
-			var roomTimeOptions []RoomTimeBadness
-			for room, roomBadness := range course.Rooms {
-				// intersect course times with instructor times
-				for time, instructorTimeBadness := range instructor.Times {
-					courseTimeBadness, present := course.Times[time]
-
-					// combine the course time badness with instructor time badness
+			// fill in the badness score for each possible room..
+			for roomIndex := 0; roomIndex < len(data.Rooms); roomIndex++ {
+				// .. at each possible time
+				for timeIndex := 0; timeIndex < len(data.Times); timeIndex++ {
+					var badness int
 					switch {
-					case len(course.Times) == 0:
-						// use the instructor time badness
-						courseTimeBadness = instructorTimeBadness
-					case !present:
-						// this course has allowed times, but this is not one of them
-						courseTimeBadness = impossible
+					case course.Rooms[roomIndex] < 0 || courseTimes[timeIndex] < 0:
+						badness = -1
+					case course.Rooms[roomIndex] >= courseTimes[timeIndex]:
+						badness = course.Rooms[roomIndex]
 					default:
-						// pick between instructor and course restraints
-						courseTimeBadness = worst(courseTimeBadness, instructorTimeBadness)
+						badness = courseTimes[timeIndex]
 					}
-
-					// if course requires multiple time slots, make sure this time has
-					// following slots
-					for t, remaining := time.Next, course.SlotsNeeded(time)-1; remaining > 0; remaining-- {
-						if t == nil {
-							courseTimeBadness = impossible
-							break
-						}
-						t = t.Next
+					section.RoomTimes[roomIndex][timeIndex] = badness
+					if badness >= 0 {
+						section.Tickets += 100 - badness
 					}
+				}
+			}
 
-					state.CourseTimeBadness[CourseTime{course, time}] = courseTimeBadness
+			// it must be possible to place the section somewhere
+			if section.Tickets == 0 {
+				log.Fatalf("no valid room/time combinations found for %s taught by %s", course.Name, instructor.Name)
+			}
+		}
+	}
 
-					// make an entry for the section
-					badness := worst(roomBadness, courseTimeBadness, instructorTimeBadness)
-					if badness.N < 0 {
+	// sort from most to least constrained
+	sort.Slice(sections, func(a, b int) bool {
+		return sections[a].Tickets < sections[b].Tickets
+	})
+
+	return sections
+}
+
+func CloneSectionList(original []*Section) []*Section {
+	var clone []*Section
+	for _, section := range original {
+		roomTimes := make([][]int, len(section.RoomTimes))
+		for i, times := range section.RoomTimes {
+			roomTimes[i] = make([]int, len(times))
+			copy(roomTimes[i], times)
+		}
+		sectionCopy := &Section{
+			Course:    section.Course,
+			RoomTimes: roomTimes,
+			Tickets:   section.Tickets,
+		}
+		clone = append(clone, sectionCopy)
+	}
+	return clone
+}
+
+func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacementList []Placement) []Placement {
+	// the schedule we are creating
+	var schedule []Placement
+
+	// get the list of sections to place
+	sections := CloneSectionList(readOnlySectionList)
+
+	// make it easy to find where the section for a given course is in our section list
+	sectionIndex := make(map[*Course]int)
+	for i, section := range sections {
+		sectionIndex[section.Course] = i
+	}
+
+	// make it easy to find the placement of a course in the schedule we are trying to improve
+	oldSchedule := make(map[*Course]Placement)
+	for _, placement := range oldPlacementList {
+		oldSchedule[placement.Course] = placement
+	}
+
+	// place the sections one at a time, starting with the most constrained
+	for sectionIndex := 0; sectionIndex < len(sections); sectionIndex++ {
+		section := sections[sectionIndex]
+		r, t := -1, -1
+
+		// should we place this section where it was in the old schedule?
+		if oldPlacement, present := oldSchedule[section.Course]; present {
+			// we have an old placement to work with
+			if section.RoomTimes[oldPlacement.Room][oldPlacement.Time] >= 0 {
+				// its old placement is at an available time
+				if UsePin() {
+					// the dice roll says we should keep it here
+					r, t = oldPlacement.Room, oldPlacement.Time
+				}
+			}
+		}
+
+		// do we need to run a lottery?
+		if r < 0 && t < 0 {
+			ticket := rand.Intn(section.Tickets)
+		lotteryLoop:
+			for room, times := range section.RoomTimes {
+				for time, badness := range times {
+					if badness < 0 {
 						continue
 					}
-					rtb := RoomTimeBadness{
-						Room:    room,
-						Time:    time,
-						Badness: badness,
-					}
-					roomTimeOptions = append(roomTimeOptions, rtb)
-				}
-			}
-
-			if len(roomTimeOptions) == 0 {
-				log.Printf("after intersecting available times for instructor %q", instructor.Name)
-				log.Printf("and course %q, no valid times are left", course.Name)
-				log.Printf("this schedule is doomed to fail")
-			}
-
-			// create the section
-			section := &Section{
-				Instructor:      instructor,
-				Course:          course,
-				RoomTimeOptions: roomTimeOptions,
-			}
-			state.Sections = append(state.Sections, section)
-		}
-	}
-
-	return state
-}
-
-func (state *SearchState) Clone() *SearchState {
-	new := &SearchState{
-		Data: state.Data,
-		InstructorTimeBadness: make(map[InstructorTime]Badness),
-		CourseTimeBadness:     make(map[CourseTime]Badness),
-		RoomTimeBadness:       make(map[RoomTime]Badness),
-		PinMean:               state.PinMean,
-		PinStddev:             state.PinStddev,
-		ReSort:                state.ReSort,
-		Generation:            state.Generation,
-	}
-
-	for _, elt := range state.Sections {
-		new.Sections = append(new.Sections, elt)
-	}
-	for k, v := range state.InstructorTimeBadness {
-		new.InstructorTimeBadness[k] = v
-	}
-	for k, v := range state.CourseTimeBadness {
-		new.CourseTimeBadness[k] = v
-	}
-	for k, v := range state.RoomTimeBadness {
-		new.RoomTimeBadness[k] = v
-	}
-	return new
-}
-
-func worst(lst ...Badness) Badness {
-	bad := impossible
-	for i, n := range lst {
-		if n.N < 0 || n.N >= 100 {
-			return impossible
-		}
-		if i == 0 || n.N > bad.N {
-			bad = n
-		}
-	}
-	return bad
-}
-
-func (state *SearchState) CollectRoomTimeOptions(section *Section) []RoomTimeBadness {
-	var lst []RoomTimeBadness
-
-options:
-	for _, rtb := range section.RoomTimeOptions {
-		if badness := state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}]; badness.N < 0 {
-			continue
-		}
-		for t, remaining := rtb.Time.Next, section.Course.SlotsNeeded(rtb.Time)-1; remaining > 0; remaining-- {
-			if badness := state.RoomTimeBadness[RoomTime{rtb.Room, t}]; badness.N < 0 {
-				continue options
-			}
-			t = t.Next
-		}
-
-		instructorBadness := state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}]
-		courseBadness := state.CourseTimeBadness[CourseTime{section.Course, rtb.Time}]
-		if badness := worst(rtb.Badness, instructorBadness, courseBadness); badness.N >= 0 {
-			lst = append(lst, RoomTimeBadness{
-				Room:    rtb.Room,
-				Time:    rtb.Time,
-				Badness: badness,
-			})
-		}
-	}
-	return lst
-}
-
-func (state *SearchState) SortSections(sections []*Section) {
-	options := make(map[*Section]int)
-	for _, section := range sections {
-		tickets := 0
-		for _, rtb := range state.CollectRoomTimeOptions(section) {
-			if rtb.Badness.N >= 0 {
-				tickets += 100 - rtb.Badness.N
-			}
-		}
-		options[section] = tickets
-	}
-	sort.Slice(sections, func(a, b int) bool {
-		return options[sections[a]] < options[sections[b]]
-	})
-}
-
-func (state *SearchState) Solve() {
-	for head := 0; head < len(state.Sections); head++ {
-		// sort remaining sections by number of options
-		if head%state.ReSort == 0 {
-			state.SortSections(state.Sections[head:])
-		}
-
-		// pick an assignment for the first section in the list
-		section := state.Sections[head]
-
-		// start with the list of all available options
-		options := state.CollectRoomTimeOptions(section)
-
-		// consider pinned courses:
-		// if PinMean is 100%, only the pinned value is acceptable
-		// if < 100%, then check if it is even an option anymore
-		// and if so, pick it with the PinMean chance before falling
-		// back to a normal lottery
-		if section.Course.PinRoom != nil || section.Course.PinTime != nil {
-			if usePin(state.PinMean, state.PinStddev) {
-				var altOptions []RoomTimeBadness
-				for _, elt := range options {
-					if (section.Course.PinRoom == nil || elt.Room == section.Course.PinRoom) &&
-						(section.Course.PinTime == nil || elt.Time == section.Course.PinTime) {
-						altOptions = append(altOptions, elt)
+					ticket -= (100 - badness)
+					if ticket < 0 {
+						r, t = room, time
+						break lotteryLoop
 					}
 				}
-				if len(altOptions) > 0 {
-					options = altOptions
+			}
+		}
+
+		// we must have a room and time by now
+		if r < 0 || t < 0 {
+			log.Fatalf("search failed to find a placement for %s taught by %s",
+				section.Course.Name, section.Course.Instructor.Name)
+		}
+
+		// record the placement
+		schedule = append(schedule, Placement{Course: section.Course, Room: r, Time: t})
+
+		// update all remaining unplaced sections
+		slots := section.Course.SlotsNeeded(data.Times[t])
+		for otherIndex := sectionIndex + 1; otherIndex < len(sections); otherIndex++ {
+			other := sections[otherIndex]
+
+			// block out this room/time for all sections
+			for i := 0; i < slots; i++ {
+				other.BlockRoomTime(r, t+i, -1, data.Times)
+			}
+
+			// block out this time in all rooms for the same instructor
+			if other.Course.Instructor == section.Course.Instructor {
+				for room := range data.Rooms {
+					for i := 0; i < slots; i++ {
+						other.BlockRoomTime(room, t+i, -1, data.Times)
+					}
 				}
 			}
-		}
 
-		if len(options) == 0 {
-			// failure
-			state.Badness = -1
-			return
-		}
-
-		// run a lottery to pick the next choice
-		tickets := 0
-		for _, elt := range options {
-			tickets += 100 - elt.Badness.N
-		}
-		winner := rand.Intn(tickets)
-		var rtb RoomTimeBadness
-		for _, elt := range options {
-			winner -= 100 - elt.Badness.N
-			if winner < 0 {
-				rtb = elt
-				break
-			}
-		}
-
-		// block this placement out of the instructor's remaining openings and the open room times
-		state.RoomTimeBadness[RoomTime{rtb.Room, rtb.Time}] = impossible
-		state.InstructorTimeBadness[InstructorTime{section.Instructor, rtb.Time}] = impossible
-		for t, remaining := rtb.Time.Next, section.Course.SlotsNeeded(rtb.Time)-1; remaining > 0; remaining-- {
-			state.RoomTimeBadness[RoomTime{rtb.Room, t}] = impossible
-			state.InstructorTimeBadness[InstructorTime{section.Instructor, t}] = impossible
-			t = t.Next
-		}
-
-		// find the worst badness for this placement
-		for other, badness := range section.Course.Conflicts {
-			old := state.CourseTimeBadness[CourseTime{other, rtb.Time}]
-			state.CourseTimeBadness[CourseTime{other, rtb.Time}] = worst(old, badness)
-			for t, remaining := rtb.Time.Next, section.Course.SlotsNeeded(rtb.Time)-1; remaining > 0; remaining-- {
-				old := state.CourseTimeBadness[CourseTime{other, t}]
-				state.CourseTimeBadness[CourseTime{other, t}] = worst(old, badness)
-				t = t.Next
-			}
-		}
-
-		// report the pick
-		assignment := &CoursePlacement{
-			Course:  section.Course,
-			Room:    rtb.Room,
-			Time:    rtb.Time,
-			Badness: rtb.Badness,
-		}
-		state.Badness += rtb.Badness.N
-		state.Schedule = append(state.Schedule, assignment)
-	}
-
-	// success!
-}
-
-func rePin(data *DataSet, state *SearchState) {
-	courseToPlacement := make(map[*Course]*CoursePlacement)
-	for _, elt := range state.Schedule {
-		courseToPlacement[elt.Course] = elt
-	}
-
-	for _, instructor := range data.Instructors {
-		for _, course := range instructor.Courses {
-			course.PinRoom = courseToPlacement[course].Room
-			course.PinTime = courseToPlacement[course].Time
-		}
-	}
-}
-
-func unPin(data *DataSet) {
-	for _, instructor := range data.Instructors {
-		for _, course := range instructor.Courses {
-			course.PinRoom = nil
-			course.PinTime = nil
-		}
-	}
-}
-
-func round(d time.Duration, nearest time.Duration) time.Duration {
-	if nearest <= 1 {
-		return d
-	}
-	r := d % nearest
-	if r+r >= nearest {
-		return d - r + nearest
-	}
-	return d - r
-}
-
-func (state *SearchState) Complain() {
-	if state.Badness < 0 {
-		return
-	}
-
-	// find what count as days (multiple time slots with the same prefix)
-	timesPerDay := make(map[string]int)
-	for _, time := range state.Data.Times {
-		if prefix := time.Prefix(); prefix != "" {
-			timesPerDay[prefix]++
-		}
-	}
-
-	instructorToPlacements := make(map[*Instructor][]*CoursePlacement)
-	for _, elt := range state.Schedule {
-		lst := instructorToPlacements[elt.Course.Instructor]
-		instructorToPlacements[elt.Course.Instructor] = append(lst, elt)
-	}
-
-	for instructor, placements := range instructorToPlacements {
-		// penalize instructors with spread out schedules on a given day
-		sort.Slice(placements, func(a, b int) bool {
-			return placements[a].Time.Position < placements[b].Time.Position
-		})
-
-		bad := 0
-		for i, a := range placements[:len(placements)-1] {
-			b := placements[i+1]
-			aPrefix := a.Time.Prefix()
-			bPrefix := b.Time.Prefix()
-			if aPrefix == "" || bPrefix == "" || aPrefix != bPrefix {
-				continue
-			}
-
-			gap := b.Time.Position - a.Time.Position
-			if gap < 2 || gap <= a.Course.SlotsNeeded(a.Time) {
-				continue
-			}
-			bad += gap * gap
-		}
-
-		// special case: when packing everything on one day, try to spread it out a little
-		if instructor.Days == 1 && len(instructor.Courses) > 3 {
-			bad = bad - 4
-			if bad < 0 {
-				bad = -bad
-			}
-		}
-		if bad > 0 {
-			state.Badness += bad
-			note := fmt.Sprintf("Added %2d because %s has gaps between classes", bad, instructor.Name)
-			state.BadNotes = append(state.BadNotes, note)
-		}
-
-		// penalize instructors with courses in too many rooms
-		inRoom := make(map[*Room]struct{})
-		for _, elt := range placements {
-			inRoom[elt.Room] = struct{}{}
-		}
-		if extra := len(inRoom) - instructor.MinRooms; extra > 0 {
-			bad := extra * extra
-			state.Badness += bad
-			note := fmt.Sprintf("Added %2d because %s is scheduled across more rooms than the minimum", bad, instructor.Name)
-			state.BadNotes = append(state.BadNotes, note)
-		}
-
-		// how many courses does the instructor have on each day?
-		onDay := make(map[string]int)
-		for _, elt := range placements {
-			// find how many classes this instructor has on each day
-			// only consider days with multiple slots (no evenings, online, etc.)
-			if prefix := elt.Time.Prefix(); timesPerDay[prefix] > 1 {
-				onDay[prefix]++
-			}
-		}
-
-		// try to honor instructor preferences for number of days teaching
-		if instructor.Days > 0 && len(onDay) != instructor.Days {
-			gap := instructor.Days - len(onDay)
-			if gap < 0 {
-				gap = -gap
-			}
-			state.Badness += 10 * gap
-			s := "s"
-			if len(onDay) == 1 {
-				s = ""
-			}
-			note := fmt.Sprintf("Added %2d because courses for %s were placed on %d day%s",
-				15*gap, instructor.Name, len(onDay), s)
-			state.BadNotes = append(state.BadNotes, note)
-		}
-
-		// penalize workloads that are unevenly split across days
-		if len(onDay) > 1 {
-			// only interesting if instructor has classes on at least two days
-			max, min := -1, -1
-			i := 0
-			for _, count := range onDay {
-				if i == 0 || count > max {
-					max = count
+			// update badness in all rooms at this time for sections with conflicts
+			if badness, present := section.Course.Conflicts[other.Course]; present {
+				for room := range data.Rooms {
+					for i := 0; i < slots; i++ {
+						other.BlockRoomTime(room, t+i, badness, data.Times)
+					}
 				}
-				if i == 0 || count < min {
-					min = count
-				}
-				i++
 			}
 
-			// add a penalty if there is more than one class difference
-			// between the most and fewest on a day
-			if gap := max - min; gap > 1 {
-				state.Badness += gap * gap
-				note := fmt.Sprintf("Added %2d because %s has more classes on some days than others",
-					gap*gap, instructor.Name)
-				state.BadNotes = append(state.BadNotes, note)
+			// did this make the schedule impossible?
+			if other.Tickets <= 0 {
+				log.Printf("placing %s %s at %s in %s made placing %s %s impossible",
+					section.Course.Instructor.Name, section.Course.Name,
+					data.Times[t].Name, data.Rooms[r].Name,
+					other.Course.Instructor.Name, other.Course.Name)
+				return nil
+			}
+
+			// update this section's placement priority based on the new ticket count
+			for i := otherIndex - 1; i >= sectionIndex+1 && sections[i+1].Tickets < sections[i].Tickets; i-- {
+				sections[i+1], sections[i] = sections[i], sections[i+1]
+			}
+		}
+	}
+
+	return schedule
+}
+
+func (section *Section) BlockRoomTime(r, t, badness int, times []*Time) {
+	slots := section.Course.SlotsNeeded(times[t])
+	for i := 0; i < slots && t-i >= 0; i++ {
+		if i > 0 && times[t-i].Next != times[t-i+1] {
+			break
+		}
+
+		old := section.RoomTimes[r][t-i]
+		if old >= 0 && (badness < 0 || badness > old) {
+			section.RoomTimes[r][t-i] = badness
+			section.Tickets -= 100 - old
+			if badness >= 0 {
+				section.Tickets += 100 - badness
 			}
 		}
 	}
 }
 
-func usePin(pin, stddev float64) bool {
+func UsePin() bool {
 	if pin >= 100.0 {
 		return true
 	}
@@ -582,7 +287,7 @@ func usePin(pin, stddev float64) bool {
 		return false
 	}
 	for {
-		n := rand.NormFloat64()*stddev + pin
+		n := rand.NormFloat64()*pinDev + pin
 		if n >= 100.0 || n < 0.0 {
 			continue
 		}
@@ -590,79 +295,50 @@ func usePin(pin, stddev float64) bool {
 	}
 }
 
-// find the minimum set of rooms necessary for an instructor
-// to cover all assigned courses.
-// note: this is the hitting set problem, which is np-complete.
-// our n is the number of courses a single instructor teaches, so
-// we just brute force it
-func findMinRooms(instructors map[string]*Instructor) {
-	for _, instructor := range instructors {
-		// get a complete list of rooms the instructor can use
-		allRooms := make(map[*Room]struct{})
-		for _, course := range instructor.Courses {
-			for room := range course.Rooms {
-				allRooms[room] = struct{}{}
+// sort a schedule by instructor, course
+func sortSchedule(schedule []Placement) {
+	sort.Slice(schedule, func(a, b int) bool {
+		if schedule[a].Course.Instructor != schedule[b].Course.Instructor {
+			return schedule[a].Course.Instructor.Name < schedule[b].Course.Instructor.Name
+		}
+		var ai, bi int
+		for ai = 0; ai < len(schedule[a].Course.Instructor.Courses); ai++ {
+			if schedule[a].Course.Instructor.Courses[ai] == schedule[a].Course {
+				break
 			}
 		}
-		rooms := make([]*Room, len(allRooms))
-		for room := range allRooms {
-			rooms = append(rooms, room)
-		}
-
-		// note: if the loop ends without finding a solution with
-		// fewer than the max number of rooms, it will leave the
-		// result at the max number without bothering to prove it
-	minRoomsLoop:
-		for instructor.MinRooms = 1; instructor.MinRooms < len(instructor.Courses); instructor.MinRooms++ {
-			n, k := len(rooms), instructor.MinRooms
-			set := nChooseKInit(n, k)
-
-		setLoop:
-			for nChooseKNext(set, n, k) {
-			courseLoop:
-				for _, course := range instructor.Courses {
-					for _, roomN := range set {
-						if _, found := course.Rooms[rooms[roomN]]; found {
-							continue courseLoop
-						}
-					}
-					continue setLoop
-				}
-
-				// success!
-				break minRoomsLoop
+		for bi = 0; bi < len(schedule[b].Course.Instructor.Courses); bi++ {
+			if schedule[b].Course.Instructor.Courses[bi] == schedule[b].Course {
+				break
 			}
 		}
-	}
+		return ai < bi
+	})
 }
 
-func nChooseKInit(n, k int) []int {
-	if k > n || n < 1 {
-		panic("n choose k got bad inputs")
+func (data *InputData) MakeSchedule(placements []Placement) Schedule {
+	roomTimes := make([][]Cell, len(data.Times))
+	for i := range roomTimes {
+		roomTimes[i] = make([]Cell, len(data.Rooms))
 	}
-	lst := make([]int, k)
-	for i := range lst {
-		lst[i] = -1
-	}
-	return lst
-}
 
-func nChooseKNext(lst []int, n, k int) bool {
-	if lst[0] == -1 {
-		for i := 0; i < k; i++ {
-			lst[i] = i
-		}
-		return true
-	}
-	for i := 0; i < k; i++ {
-		elt := lst[k-1-i]
-		if elt < n-1-i {
-			for j := k - 1 - i; j < k; j++ {
-				elt++
-				lst[j] = elt
+	for _, placement := range placements {
+		slots := placement.Course.SlotsNeeded(data.Times[placement.Time])
+		for i := 0; i < slots; i++ {
+			if roomTimes[placement.Time+i][placement.Room].Instructor != "" {
+				log.Fatalf("%s %s cannot be scheduled at %s in %s because that slot is already used by %s %s",
+					placement.Course.Instructor.Name, placement.Course.Name,
+					data.Times[placement.Time].Name, data.Rooms[placement.Room].Name,
+					roomTimes[placement.Time+i][placement.Room].Instructor,
+					roomTimes[placement.Time+i][placement.Room].Course)
 			}
-			return true
+			roomTimes[placement.Time+i][placement.Room].Instructor = placement.Course.Instructor.Name
+			roomTimes[placement.Time+i][placement.Room].Course = placement.Course.Name
+			if i > 0 {
+				roomTimes[placement.Time+i][placement.Room].IsSpillover = true
+			}
 		}
 	}
-	return false
+
+	return Schedule{RoomTimes: roomTimes}
 }
