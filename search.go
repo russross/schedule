@@ -20,16 +20,9 @@ type Placement struct {
 	Time   int
 }
 
-// A Schedule is a two-dimensional view of the placed sections,
-// ready to be scored and displayed.
-type Schedule struct {
-	RoomTimes [][]Cell
-	Badness   int
-}
-
+// A Cell is one entry in a grid of course room-times.
 type Cell struct {
-	Instructor  string
-	Course      string
+	Course      *Course
 	IsSpillover bool
 }
 
@@ -316,29 +309,28 @@ func sortSchedule(schedule []Placement) {
 	})
 }
 
-func (data *InputData) MakeSchedule(placements []Placement) Schedule {
-	roomTimes := make([][]Cell, len(data.Times))
+func (data *InputData) MakeGrid(placements []Placement) [][]Cell {
+	roomTimes := make([][]Cell, len(data.Rooms))
 	for i := range roomTimes {
-		roomTimes[i] = make([]Cell, len(data.Rooms))
+		roomTimes[i] = make([]Cell, len(data.Times))
 	}
 
 	for _, placement := range placements {
 		slots := placement.Course.SlotsNeeded(data.Times[placement.Time])
 		for i := 0; i < slots; i++ {
-			if roomTimes[placement.Time+i][placement.Room].Instructor != "" {
+			if roomTimes[placement.Room][placement.Time+i].Course != nil {
 				log.Fatalf("%s %s cannot be scheduled at %s in %s because that slot is already used by %s %s",
 					placement.Course.Instructor.Name, placement.Course.Name,
 					data.Times[placement.Time].Name, data.Rooms[placement.Room].Name,
-					roomTimes[placement.Time+i][placement.Room].Instructor,
-					roomTimes[placement.Time+i][placement.Room].Course)
+					roomTimes[placement.Room][placement.Time+i].Course.Instructor.Name,
+					roomTimes[placement.Room][placement.Time+i].Course.Name)
 			}
-			roomTimes[placement.Time+i][placement.Room].Instructor = placement.Course.Instructor.Name
-			roomTimes[placement.Time+i][placement.Room].Course = placement.Course.Name
+			roomTimes[placement.Room][placement.Time+i].Course = placement.Course
 			if i > 0 {
-				roomTimes[placement.Time+i][placement.Room].IsSpillover = true
+				roomTimes[placement.Room][placement.Time+i].IsSpillover = true
 			}
 		}
 	}
 
-	return Schedule{RoomTimes: roomTimes}
+	return roomTimes
 }

@@ -75,53 +75,65 @@ func main() {
 		return
 	}
 	//sortSchedule(placements)
-	schedule := inputData.MakeSchedule(placements)
+	grid := inputData.MakeGrid(placements)
+	schedule := inputData.Score(grid)
 
-	instructorLen := 0
-	courseLen := 0
+	nameLen := 0
 	for _, instructor := range inputData.Instructors {
-		if len(instructor.Name) > instructorLen {
-			instructorLen = len(instructor.Name)
+		if len(instructor.Name) > nameLen {
+			nameLen = len(instructor.Name)
 		}
 		for _, course := range instructor.Courses {
-			if len(course.Name) > courseLen {
-				courseLen = len(course.Name)
+			if len(course.Name) > nameLen {
+				nameLen = len(course.Name)
 			}
 		}
 	}
 
-	size := instructorLen
-	if courseLen > size {
-		size = courseLen
-	}
 	hyphens := ""
-	for i := 0; i < size; i++ {
+	dots := ""
+	for i := 0; i < nameLen; i++ {
 		hyphens += "-"
+		dots += "."
 	}
-	for _, row := range schedule.RoomTimes {
-		for range row {
-			fmt.Printf("+--%s--", hyphens)
+	for t := range inputData.Times {
+		for range inputData.Rooms {
+			fmt.Printf("+-%s-", hyphens)
 		}
 		fmt.Println("+")
-		for _, col := range row {
-			if col.IsSpillover {
-				fmt.Printf("| (%*s) ", size, col.Instructor)
-			} else {
-				fmt.Printf("|  %*s  ", size, col.Instructor)
+		for r := range inputData.Rooms {
+			cell := schedule.RoomTimes[r][t]
+			switch {
+			case cell.IsSpillover:
+				fmt.Printf("| %s ", dots)
+			case cell.Course != nil:
+				fmt.Printf("| %*s ", nameLen, cell.Course.Instructor.Name)
+			default:
+				fmt.Printf("| %*s ", nameLen, "")
 			}
 		}
 		fmt.Println("|")
-		for _, col := range row {
-			if col.IsSpillover {
-				fmt.Printf("| (%*s) ", size, col.Course)
-			} else {
-				fmt.Printf("|  %*s  ", size, col.Course)
+		for r := range inputData.Rooms {
+			cell := schedule.RoomTimes[r][t]
+			switch {
+			case cell.IsSpillover:
+				fmt.Printf("| %s ", dots)
+			case cell.Course != nil:
+				fmt.Printf("| %*s ", nameLen, cell.Course.Name)
+			default:
+				fmt.Printf("| %*s ", nameLen, "")
 			}
 		}
 		fmt.Println("|")
 	}
-	for range schedule.RoomTimes[0] {
-		fmt.Printf("+--%s--", hyphens)
+	for range inputData.Rooms {
+		fmt.Printf("+-%s-", hyphens)
 	}
 	fmt.Println("+")
+	fmt.Println()
+	for _, msg := range schedule.Problems {
+		fmt.Println("* " + msg)
+	}
+	fmt.Println()
+	fmt.Printf("Total badness %d\n", schedule.Badness)
 }
