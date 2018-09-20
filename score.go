@@ -28,7 +28,8 @@ func (s *Schedule) AddBadness(badness int) {
 
 const Impossible int = 1000000
 
-func (data *InputData) Score(grid [][]Cell) Schedule {
+func (data *InputData) Score(placements []Placement) Schedule {
+	grid := data.MakeGrid(placements)
 	schedule := Schedule{RoomTimes: grid}
 	var problems []Problem
 
@@ -111,8 +112,147 @@ func (data *InputData) Score(grid [][]Cell) Schedule {
 		}
 	}
 
+	// find what count as days (multiple time slots with the same prefix)
+	timesPerDay := make(map[string]int)
+	for _, time := range data.Times {
+		if prefix := time.Prefix(); prefix != "" {
+			timesPerDay[prefix]++
+		}
+	}
+
 	// check how many rooms the instructor is assigned to
 	// check how spread out the instructor's schedule is
+	// check the split of an instructor's classes across days
+	instructorToPlacements := make(map[*Instructor][]Placement)
+	for _, placement := range placements {
+		lst := instructorToPlacements[placement.Course.Instructor]
+		instructorToPlacements[placement.Course.Instructor] = append(lst, placement)
+	}
+
+	// check each instructor's schedule for niceness
+	for instructor, list := range instructorToPlacements {
+		sort.Slice(list, func(a, b int) bool {
+			return list[a].Time < list[b].Time
+		})
+
+		// gather info about how many classes are in each room and on each day
+		inRoom := make(map[int]int)
+		onDay := make(map[string][]Placement)
+		for _, elt := range list {
+			inRoom[elt.Room]++
+			if prefix := data.Times[elt.Time].Prefix(); timesPerDay[prefix] > 1 {
+				onDay[prefix] = append(onDay[prefix], elt)
+			}
+		}
+
+		// penalize instructors with courses in too many rooms
+		if extra := len(inRoom) - instructor.MinRooms; extra > 0 {
+			badness := extra * extra
+			msg := fmt.Sprintf("instructor convenience: %s is spread across more rooms than necessary (badness %d)",
+				instructor.Name, badness)
+			problems = append(problems, Problem{Message: msg, Badness: badness})
+		}
+
+		// penalize workloads that are unevenly split across days
+		if len(onDay) > 1 {
+			max, min := -1, -1
+			i := 0
+			for _, classes := range onDay {
+				count := len(classes)
+				if i == 0 || count > max {
+					max = count
+				}
+				if i == 0 || count < min {
+					min = count
+				}
+				i++
+			}
+
+			// add a penalty if there is more than one class difference between
+			// the most and fewest on a day
+			if gap := max - min; gap > 1 {
+				badness := gap * gap
+				msg := fmt.Sprintf("instructor convenience: %s has more classes on some days than others (badess %d)",
+					instructor.Name, badness)
+				problems = append(problems, Problem{Message: msg, Badness: badness})
+			}
+		}
+
+		// try to honor instructor preference for number of days teaching
+		if instructor.Days > 0 && len(onDay) != instructor.Days {
+			gap := instructor.Days - len(onDay)
+			if gap < 0 {
+				gap = -gap
+			}
+			badness := 10 * gap
+			wanted := "s"
+			if instructor.Days == 1 {
+				wanted = ""
+			}
+			got := "s"
+			if len(onDay) == 1 {
+				got = ""
+			}
+			msg := fmt.Sprintf("instructor preference: %s has classes on %d day%s but wanted them on %d day%s (badness %d)",
+				instructor.Name, len(onDay), got, instructor.Days, wanted, badness)
+			problems = append(problems, Problem{Message: msg, Badness: badness})
+		}
+
+		if len(instructor.Courses) > 1 {
+			badness := 0
+
+			// penalize schedules that are too spread out or too clustered on a given day
+			for _, classes := range onDay {
+				// if there are an odd number of classes this day, it's okay to have a lone class
+				singletonOkay := len(classes)&1 == 1
+				i := 0
+				for i < len(classes) {
+					// find the beginning of the next cluster of classes (if any)
+					slotsNeeded := classes[i].Course.SlotsNeeded(data.Times[classes[i].Time])
+					var next int
+					for next = i + 1; next < len(classes); next++ {
+						if classes[next].Time-classes[next-1].Time > slotsNeeded {
+							size := classes[next].Time - classes[next-1].Time - slotsNeeded
+
+							// is this gap too long?
+							if size > 1 {
+								// 2 => 4, 3 => 9, 4 => 16
+								badness += size * size
+							}
+
+							break
+						}
+						slotsNeeded = classes[next].Course.SlotsNeeded(data.Times[classes[next].Time])
+					}
+
+					clusterSize := next - i
+					i = next
+
+					// was this cluster of classes too long or too short?
+					if clusterSize == 1 && singletonOkay {
+						// this is the odd class on this day
+						singletonOkay = false
+					} else {
+						// clusters of size two are perfect, anything else gets a penalty
+						mismatch := clusterSize - 2
+						if mismatch < 0 {
+							mismatch = -mismatch
+						}
+						if mismatch != 0 {
+							// 1 => 2, 3 => 2, 4 => 6, 5 => 12
+							badness += mismatch * (mismatch + 1)
+						}
+					}
+				}
+			}
+
+			if badness > 0 {
+				msg := fmt.Sprintf("instructor convenience: %s has classes that are poorly spread out (badness %d)",
+					instructor.Name, badness)
+				problems = append(problems, Problem{Message: msg, Badness: badness})
+			}
+		}
+	}
 
 	sort.Slice(problems, func(a, b int) bool {
 		if problems[a].Badness != problems[b].Badness {

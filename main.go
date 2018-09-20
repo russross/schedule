@@ -70,13 +70,12 @@ func main() {
 	sections := inputData.MakeSectionList()
 
 	// generate a schedule
-	placements := inputData.PlaceSections(sections, nil)
-	if placements == nil {
-		return
+	var placements []Placement
+
+	for placements == nil {
+		placements = inputData.PlaceSections(sections, nil)
 	}
-	//sortSchedule(placements)
-	grid := inputData.MakeGrid(placements)
-	schedule := inputData.Score(grid)
+	schedule := inputData.Score(placements)
 
 	nameLen := 0
 	for _, instructor := range inputData.Instructors {
@@ -131,6 +130,7 @@ func main() {
 	}
 	fmt.Println("+")
 	fmt.Println()
+	fmt.Println("Known problems:")
 	for _, msg := range schedule.Problems {
 		fmt.Println("* " + msg)
 	}
