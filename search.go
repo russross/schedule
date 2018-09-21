@@ -26,6 +26,8 @@ type Cell struct {
 	IsSpillover bool
 }
 
+// MakeSectionList forms a list of sections in order from most- to least-constrained.
+// The list it returns is read-only and only its clones can be modified.
 func (data *InputData) MakeSectionList() []*Section {
 	var sections []*Section
 	for _, instructor := range data.Instructors {
@@ -145,6 +147,20 @@ func CloneSectionList(original []*Section) []*Section {
 }
 
 func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacementList []Placement) []Placement {
+	// the pin value to use for this round
+	var localPin float64
+	switch {
+	case pin >= 100.0:
+		localPin = 100.0
+	case pin <= 0.0:
+		localPin = 0.0
+	default:
+		localPin = -1.0
+		for localPin >= 100.0 || localPin < 0.0 {
+			localPin = rand.NormFloat64()*pindev + pin
+		}
+	}
+
 	// the schedule we are creating
 	var schedule []Placement
 
@@ -173,7 +189,7 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 			// we have an old placement to work with
 			if section.RoomTimes[oldPlacement.Room][oldPlacement.Time] >= 0 {
 				// its old placement is at an available time
-				if UsePin() {
+				if rand.Float64()*100.0 < localPin {
 					// the dice roll says we should keep it here
 					r, t = oldPlacement.Room, oldPlacement.Time
 				}
@@ -237,10 +253,12 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 
 			// did this make the schedule impossible?
 			if other.Tickets <= 0 {
-				log.Printf("placing %s %s at %s in %s made placing %s %s impossible",
-					section.Course.Instructor.Name, section.Course.Name,
-					data.Times[t].Name, data.Rooms[r].Name,
-					other.Course.Instructor.Name, other.Course.Name)
+				/*
+					log.Printf("placing %s %s at %s in %s made placing %s %s impossible",
+						section.Course.Instructor.Name, section.Course.Name,
+						data.Times[t].Name, data.Rooms[r].Name,
+						other.Course.Instructor.Name, other.Course.Name)
+				*/
 				return nil
 			}
 
@@ -269,22 +287,6 @@ func (section *Section) BlockRoomTime(r, t, badness int, times []*Time) {
 				section.Tickets += 100 - badness
 			}
 		}
-	}
-}
-
-func UsePin() bool {
-	if pin >= 100.0 {
-		return true
-	}
-	if pin <= 0.0 {
-		return false
-	}
-	for {
-		n := rand.NormFloat64()*pinDev + pin
-		if n >= 100.0 || n < 0.0 {
-			continue
-		}
-		return rand.Float64()*100.0 < n
 	}
 }
 
