@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"sort"
@@ -291,19 +292,19 @@ func (section *Section) BlockRoomTime(r, t, badness int, times []*Time) {
 }
 
 // sort a schedule by instructor, course
-func sortSchedule(schedule []Placement) {
-	sort.Slice(schedule, func(a, b int) bool {
-		if schedule[a].Course.Instructor != schedule[b].Course.Instructor {
-			return schedule[a].Course.Instructor.Name < schedule[b].Course.Instructor.Name
+func sortPlacements(placements []Placement) {
+	sort.Slice(placements, func(a, b int) bool {
+		if placements[a].Course.Instructor != placements[b].Course.Instructor {
+			return placements[a].Course.Instructor.Name < placements[b].Course.Instructor.Name
 		}
 		var ai, bi int
-		for ai = 0; ai < len(schedule[a].Course.Instructor.Courses); ai++ {
-			if schedule[a].Course.Instructor.Courses[ai] == schedule[a].Course {
+		for ai = 0; ai < len(placements[a].Course.Instructor.Courses); ai++ {
+			if placements[a].Course.Instructor.Courses[ai] == placements[a].Course {
 				break
 			}
 		}
-		for bi = 0; bi < len(schedule[b].Course.Instructor.Courses); bi++ {
-			if schedule[b].Course.Instructor.Courses[bi] == schedule[b].Course {
+		for bi = 0; bi < len(placements[b].Course.Instructor.Courses); bi++ {
+			if placements[b].Course.Instructor.Courses[bi] == placements[b].Course {
 				break
 			}
 		}
@@ -335,4 +336,160 @@ func (data *InputData) MakeGrid(placements []Placement) [][]Cell {
 	}
 
 	return roomTimes
+}
+
+func (data *InputData) SearchSwaps(maxDepth int, baseline Schedule, sections []*Section) Schedule {
+	// clone the schedule so we can modify it as we search
+	working := baseline.Clone()
+	best := Schedule{Badness: Impossible}
+	courseToSection := make(map[*Course]*Section)
+	for _, section := range sections {
+		courseToSection[section.Course] = section
+	}
+	courseToPlacementIndex := make(map[*Course]int)
+	for i, placement := range working.Placements {
+		courseToPlacementIndex[placement.Course] = i
+	}
+
+	// each course that is not currently placed/has been moved
+	var displaced []Placement
+	var replaced []*Course
+
+	// helper functions
+	removeFromMatrix := func(p Placement) {
+		slots := p.Course.SlotsNeeded(data.Times[p.Time])
+		for i := 0; i < slots; i++ {
+			if working.RoomTimes[p.Room][p.Time+i].Course != p.Course {
+				panic("removeFromMatrix asked to remove course that was not in expected place")
+			}
+			working.RoomTimes[p.Room][p.Time+i] = Cell{}
+		}
+	}
+
+	addToMatrix := func(p Placement) {
+		slots := p.Course.SlotsNeeded(data.Times[p.Time])
+		for i := 0; i < slots; i++ {
+			if working.RoomTimes[p.Room][p.Time+i].Course != nil {
+				panic("addToMatrix asked to add course on top of existing course")
+			}
+			working.RoomTimes[p.Room][p.Time+i] = Cell{Course: p.Course, IsSpillover: i > 0}
+		}
+	}
+
+	// the main recursive search function
+	// it returns with, working, displaced, and replaced are restored to
+	// the state they were in when it was called
+	// best will have a clone of any improved schedule it finds
+	var search func(int)
+	search = func(depth int) {
+		// base case: successful search
+		if len(displaced) == 0 {
+			// score it
+			scored := data.Score(working.Placements)
+
+			// if we have a new best, clone the schedule and keep it
+			if scored.Badness < working.Badness && scored.Badness < best.Badness {
+				best = scored.Clone()
+				fmt.Printf("found an improvement with score %d\n", scored.Badness)
+			}
+			return
+		}
+
+		// base case: failed search
+		if depth > maxDepth || len(displaced) > maxDepth-depth {
+			return
+		}
+
+		// take one placement from the displaced list
+		oldPlacement := displaced[len(displaced)-1]
+		course := oldPlacement.Course
+		displaced = displaced[:len(displaced)-1]
+
+		// try every possible placement for it, adding to the displaced list as needed
+		section := courseToSection[course]
+		for r, times := range section.RoomTimes {
+		timeLoop:
+			for t, badness := range times {
+				// cannot move it here if it is not allowed here
+				if badness < 0 {
+					continue
+				}
+
+				// cannot move it hereif it is not actually a move
+				if r == oldPlacement.Room && t == oldPlacement.Time {
+					continue
+				}
+
+				// which sections are in the way?
+				var inTheWay []Placement
+				slots := course.SlotsNeeded(data.Times[t])
+				for si := 0; si < slots; si++ {
+					target := working.RoomTimes[r][t+si].Course
+					if target != nil {
+						if len(inTheWay) == 0 || target != inTheWay[len(inTheWay)-1].Course {
+							// cannot displace a course that we already moved
+							for _, elt := range replaced {
+								if target == elt {
+									continue timeLoop
+								}
+							}
+							index := courseToPlacementIndex[target]
+							inTheWay = append(inTheWay, working.Placements[index])
+						}
+					}
+				}
+
+				newPlacement := Placement{
+					Course: course,
+					Room:   r,
+					Time:   t,
+				}
+
+				// remove the in-the-way courses and push them to the displaced list
+				for _, p := range inTheWay {
+					displaced = append(displaced, p)
+					removeFromMatrix(p)
+				}
+
+				// place the course here
+				working.Placements[courseToPlacementIndex[course]] = newPlacement
+				replaced = append(replaced, course)
+				addToMatrix(newPlacement)
+
+				// continue the search
+				search(depth + 1)
+
+				// undo the new placement
+				removeFromMatrix(newPlacement)
+				replaced = replaced[:len(replaced)-1]
+				working.Placements[courseToPlacementIndex[course]] = oldPlacement
+
+				// restore the in-the-way courses
+				for _, p := range inTheWay {
+					displaced = displaced[:len(displaced)-1]
+					addToMatrix(p)
+				}
+			}
+		}
+
+		// move this course back to the displaced list
+		displaced = append(displaced, oldPlacement)
+	}
+
+	// displace each section, then start a search for a new place to put it
+	for _, placement := range working.Placements {
+		displaced = append(displaced, placement)
+		removeFromMatrix(placement)
+
+		search(0)
+
+		displaced = displaced[:len(displaced)-1]
+		addToMatrix(placement)
+
+		if len(displaced) != 0 {
+			panic("swap search call did not clean up displaced list to empty")
+		}
+	}
+
+	return best
 }

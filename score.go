@@ -8,9 +8,10 @@ import (
 // A Schedule is a two-dimensional view of the placed sections,
 // ready to be scored and displayed.
 type Schedule struct {
-	RoomTimes [][]Cell
-	Problems  []string
-	Badness   int
+	Placements []Placement
+	RoomTimes  [][]Cell
+	Problems   []string
+	Badness    int
 }
 
 type Problem struct {
@@ -30,7 +31,7 @@ const Impossible int = 1000000
 
 func (data *InputData) Score(placements []Placement) Schedule {
 	grid := data.MakeGrid(placements)
-	schedule := Schedule{RoomTimes: grid}
+	schedule := Schedule{Placements: placements, RoomTimes: grid}
 	var problems []Problem
 
 	// check each time slot
@@ -265,4 +266,23 @@ func (data *InputData) Score(placements []Placement) Schedule {
 		schedule.AddBadness(problem.Badness)
 	}
 	return schedule
+}
+
+func (old Schedule) Clone() Schedule {
+	placements := make([]Placement, len(old.Placements))
+	copy(placements, old.Placements)
+	roomTimes := make([][]Cell, len(old.RoomTimes))
+	for i, lst := range old.RoomTimes {
+		cells := make([]Cell, len(lst))
+		copy(cells, lst)
+		roomTimes[i] = cells
+	}
+	problems := make([]string, len(old.Problems))
+	copy(problems, old.Problems)
+	return Schedule{
+		Placements: placements,
+		RoomTimes:  roomTimes,
+		Problems:   problems,
+		Badness:    old.Badness,
+	}
 }

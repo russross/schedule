@@ -19,7 +19,17 @@ var (
 	warmup        = 15 * time.Second
 	restartLocal  = 30 * time.Second
 	restartGlobal = 60 * time.Second
+	maxSwapDepth  = 2
 	prefix        = "schedule"
+)
+
+const (
+	worst int = 1e9
+
+	ModeWarmup int = iota
+	ModeLocalBest
+	ModeGlobalBest
+	ModeClimbing
 )
 
 func main() {
@@ -33,6 +43,7 @@ func main() {
 	flag.DurationVar(&warmup, "warmup", warmup, "time to spend finding best random schedule before refining it")
 	flag.DurationVar(&restartLocal, "restartlocal", restartLocal, "restart after this long since finding a local best score")
 	flag.DurationVar(&restartGlobal, "restartglobal", restartGlobal, "restart after this long since finding the global best score")
+	flag.IntVar(&maxSwapDepth, "swaps", maxSwapDepth, "maximum number of swaps to perform when trying to improve a global best score")
 	flag.StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, .html, and .json suffixes)")
 	flag.Parse()
 	if flag.NArg() != 0 {
@@ -84,10 +95,10 @@ func main() {
 	var wg sync.WaitGroup
 	var mutex sync.Mutex
 
-	worst := int(1e9)
-	baselinePlacements := []Placement{}
-	localBestScore, localBestPlacements := worst, []Placement{}
-	globalBestScore := worst
+	mode := ModeWarmup
+	baseline := Schedule{Badness: worst}
+	localBest := Schedule{Badness: worst}
+	globalBest := Schedule{Badness: worst}
 	lastImprovement := time.Now()
 	successfullAttempts := 0
 	failedAttempts := 0
@@ -104,29 +115,50 @@ func main() {
 				mutex.Lock()
 
 				switch {
-				// are we in a warmup?
-				case len(baselinePlacements) == 0:
+				case mode == ModeWarmup:
 					// is it time to move on to refinement?
 					if now.Sub(lastImprovement) >= warmup {
-						if len(localBestPlacements) == 0 {
+						if len(localBest.Placements) == 0 {
 							// we did not find any valid schedules
 							log.Fatalf("no valid schedule found in warmup period")
 						}
-						baselinePlacements = localBestPlacements
+						baseline = localBest
 						lastImprovement = now
 						log.Printf("ending warmup")
+						mode = ModeLocalBest
 					}
 
-				// is it time to restart?
-				case localBestScore > globalBestScore && now.Sub(lastImprovement) >= restartLocal ||
-					localBestScore <= globalBestScore && now.Sub(lastImprovement) >= restartGlobal:
-					baselinePlacements = nil
-					localBestScore, localBestPlacements = worst, nil
+				// is it time to restart from local best?
+				case mode == ModeLocalBest && now.Sub(lastImprovement) >= restartLocal:
+					baseline = Schedule{Badness: worst}
+					localBest = Schedule{Badness: worst}
 					lastImprovement = now
 					log.Printf("restarting")
+					mode = ModeWarmup
+
+				// is it time to try a swapping search on a global best?
+				case mode == ModeGlobalBest && now.Sub(lastImprovement) >= restartGlobal:
+					log.Printf("starting a swap search with maximum of %d swaps", maxSwapDepth)
+					start := time.Now()
+					best := data.SearchSwaps(maxSwapDepth, globalBest, sections)
+					now = time.Now()
+					if best.Badness < globalBest.Badness {
+						log.Printf("swap search improved global best to %d in %v", best.Badness, now.Sub(start))
+						data.PrintSchedule(best)
+						globalBest = best
+						localBest = best
+						baseline = best
+						lastImprovement = now
+					} else {
+						log.Printf("swap search found no improvements in %v, restarting", now.Sub(start))
+						baseline = Schedule{Badness: worst}
+						localBest = Schedule{Badness: worst}
+						lastImprovement = now
+						mode = ModeWarmup
+					}
 				}
 
-				base := baselinePlacements
+				base := baseline.Placements
 				mutex.Unlock()
 
 				// generate a schedule
@@ -146,38 +178,38 @@ func main() {
 				mutex.Lock()
 				successfullAttempts++
 
-				if schedule.Badness < globalBestScore {
+				if schedule.Badness < globalBest.Badness {
 					// new global best? always keep it
-					globalBestScore = schedule.Badness
-					localBestScore, localBestPlacements = schedule.Badness, candidate
+					globalBest = schedule
+					localBest = schedule
 
-					if len(baselinePlacements) == 0 {
+					if mode == ModeWarmup {
 						// if we are in a warmup, just keep going
 						log.Printf("global best of %d found in warmup", schedule.Badness)
 					} else {
 						// if we are in a refinement period, reset the counter and the baseline
-						baselinePlacements = candidate
+						baseline = schedule
 						lastImprovement = now
 						log.Printf("global best of %d found", schedule.Badness)
+						mode = ModeGlobalBest
 					}
 					data.PrintSchedule(schedule)
-				} else if schedule.Badness < localBestScore {
+				} else if schedule.Badness < localBest.Badness {
 					// new local best?
 					switch {
-					case len(baselinePlacements) == 0 && len(base) > 0:
+					case mode == ModeWarmup && len(base) > 0:
 						// it was a holdover from before a restart, so discard it
 
-					case len(baselinePlacements) == 0:
-						// warmup
-						localBestScore, localBestPlacements = schedule.Badness, candidate
-						log.Printf("warmup best of %d found (global best is %d)", schedule.Badness, globalBestScore)
+					case mode == ModeWarmup:
+						localBest = schedule
+						log.Printf("warmup best of %d found (global best is %d)", schedule.Badness, globalBest.Badness)
 
 					default:
 						// refinement
-						baselinePlacements = candidate
-						localBestScore, localBestPlacements = schedule.Badness, candidate
+						baseline = schedule
+						localBest = schedule
 						lastImprovement = now
-						log.Printf("local best of %d found (global best is %d)", schedule.Badness, globalBestScore)
+						log.Printf("local best of %d found (global best is %d)", schedule.Badness, globalBest.Badness)
 					}
 				}
 
