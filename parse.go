@@ -1,13 +1,8 @@
 package main
 
 import (
-	"bufio"
-	"encoding/csv"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -507,63 +502,6 @@ func parseBadness(tag string) (string, int, error) {
 	default:
 		return "", 0, fmt.Errorf("error parsing badness value in %q", tag)
 	}
-}
-
-func fetchFile(filename string) ([][]string, error) {
-	var lines [][]string
-
-	var reader io.Reader
-	isCsv := false
-	if strings.HasPrefix(filename, "http:") || strings.HasPrefix(filename, "https:") {
-		const docsSuffix = "/edit?usp=sharing"
-		if strings.HasSuffix(filename, docsSuffix) {
-			filename = filename[:len(filename)-len(docsSuffix)] + "/export?format=csv"
-			isCsv = true
-		}
-		log.Printf("downloading input URL %s", filename)
-		res, err := http.Get(filename)
-		if err != nil {
-			return nil, err
-		}
-		defer res.Body.Close()
-		reader = res.Body
-	} else {
-		log.Printf("reading input file %s", filename)
-		fp, err := os.Open(filename)
-		if err != nil {
-			return nil, err
-		}
-		defer fp.Close()
-		reader = fp
-		isCsv = strings.HasSuffix(filename, ".csv")
-	}
-
-	if isCsv {
-		buf := bufio.NewReader(reader)
-		reader := csv.NewReader(buf)
-		for {
-			record, err := reader.Read()
-			if err != nil {
-				if err != io.EOF {
-					return nil, err
-				}
-				break
-			}
-			lines = append(lines, record)
-		}
-	} else {
-		// get a line reader
-		scanner := bufio.NewScanner(reader)
-		for scanner.Scan() {
-			line := scanner.Text()
-			fields := strings.Fields(line)
-			lines = append(lines, fields)
-		}
-		if err := scanner.Err(); err != nil {
-			return nil, err
-		}
-	}
-	return lines, nil
 }
 
 // find the minimum set of rooms necessary for an instructor

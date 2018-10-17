@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"math/rand"
 	"sort"
@@ -147,21 +146,7 @@ func CloneSectionList(original []*Section) []*Section {
 	return clone
 }
 
-func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacementList []Placement) []Placement {
-	// the pin value to use for this round
-	var localPin float64
-	switch {
-	case pin >= 100.0:
-		localPin = 100.0
-	case pin <= 0.0:
-		localPin = 0.0
-	default:
-		localPin = -1.0
-		for localPin >= 100.0 || localPin < 0.0 {
-			localPin = rand.NormFloat64()*pindev + pin
-		}
-	}
-
+func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacementList []Placement, localPin float64) []Placement {
 	// the schedule we are creating
 	var schedule []Placement
 
@@ -338,7 +323,7 @@ func (data *InputData) MakeGrid(placements []Placement) [][]Cell {
 	return roomTimes
 }
 
-func (data *InputData) SearchSwaps(maxDepth int, baseline Schedule, sections []*Section) Schedule {
+func (data *InputData) SearchSwaps(sections []*Section, baseline Schedule, maxDepth int, placementIndex int) Schedule {
 	// clone the schedule so we can modify it as we search
 	working := baseline.Clone()
 	best := Schedule{Badness: Impossible}
@@ -390,8 +375,22 @@ func (data *InputData) SearchSwaps(maxDepth int, baseline Schedule, sections []*
 			// if we have a new best, clone the schedule and keep it
 			if scored.Badness < working.Badness && scored.Badness < best.Badness {
 				best = scored.Clone()
-				fmt.Printf("found an improvement with score %d\n", scored.Badness)
+				//log.Printf("found a %d-swap improvement with score %d", depth, scored.Badness)
 			}
+
+			// continue swapping if there is still some depth left
+			if maxDepth > depth {
+				for _, placement := range working.Placements[placementIndex+1:] {
+					displaced = append(displaced, placement)
+					removeFromMatrix(placement)
+
+					search(depth + 1)
+
+					displaced = displaced[:len(displaced)-1]
+					addToMatrix(placement)
+				}
+			}
+
 			return
 		}
 
@@ -477,18 +476,17 @@ func (data *InputData) SearchSwaps(maxDepth int, baseline Schedule, sections []*
 	}
 
 	// displace each section, then start a search for a new place to put it
-	for _, placement := range working.Placements {
-		displaced = append(displaced, placement)
-		removeFromMatrix(placement)
+	placement := working.Placements[placementIndex]
+	displaced = append(displaced, placement)
+	removeFromMatrix(placement)
 
-		search(0)
+	search(0)
 
-		displaced = displaced[:len(displaced)-1]
-		addToMatrix(placement)
+	displaced = displaced[:len(displaced)-1]
+	addToMatrix(placement)
 
-		if len(displaced) != 0 {
-			panic("swap search call did not clean up displaced list to empty")
-		}
+	if len(displaced) != 0 {
+		panic("swap search call did not clean up displaced list to empty")
 	}
 
 	return best
