@@ -42,6 +42,7 @@ func (data *InputData) Score(placements []Placement) Schedule {
 			if courseA == nil {
 				continue
 			}
+			isSpilloverA := grid[roomA][t].IsSpillover
 
 			// is this a bad time for this instructor?
 			if badness := courseA.Instructor.Times[t]; badness > 0 && badness < 100 {
@@ -66,8 +67,8 @@ func (data *InputData) Score(placements []Placement) Schedule {
 				}
 			}
 
-			// is this a bad room for this course?
-			if badness := courseA.Rooms[roomA]; badness != 0 {
+			// is this a bad room for this course? (only counts once per course)
+			if badness := courseA.Rooms[roomA]; !isSpilloverA && badness != 0 {
 				if badness < 0 || badness >= 100 {
 					badness = Impossible
 				}

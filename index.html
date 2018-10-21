@@ -71,6 +71,12 @@
                         matches[j].parentElement.style.backgroundColor = '';
                     }
                 });
+                spans[i].addEventListener('mousedown', function (event) {
+                    var matches = document.getElementsByClassName(event.target.className);
+                    for (var j = 0; j < matches.length; j++) {
+                        matches[j].parentElement.style.backgroundColor = '';
+                    }
+                });
             }
         };
         window.schedule.setupDragDrop = function () {
