@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Schedule of rooms by time</title>
+  <style>
+    table, td { border: 1px solid darkgray; }
+    span, b { cursor: pointer; }
+  </style>
+  <script src="wasm_exec.js"></script>
+</head>
+
+<body>
+  <table>
+    <tbody id="grid">
+      <tr><td></td></tr>
+    </tbody>
+  </table>
+
+  <p id="badness">Please wait while the schedule loads…</p>
+  <ul id="problems"></ul>
+  <p id="download"></p>
+
+<script>
+    (function () {
+        window.schedule = {};
+        window.schedule.setupHover = function () {
+            var numbers = {};
+            var next = 1;
+            var tds = document.getElementsByTagName('td');
+            var notes = document.getElementsByTagName('li');
+            for (var i = 0; i < notes.length; i++) {
+                notes[i].innerHTML = '<span>' + notes[i].innerHTML + '</span>';
+            }
+            for (var i = 0; i < tds.length; i++) {
+                var parts = tds[i].innerHTML.split('<br>');
+                if (parts.length > 1) {
+                    for (var j = 0; j < parts.length && j < 2; j++) {
+                        if (!numbers.hasOwnProperty(parts[j])) {
+                            for (var k = 0; k < notes.length; k++) {
+                                var text = notes[k].innerHTML;
+                                var index = text.indexOf(parts[j]);
+                                if (index >= 0) {
+                                    text = text.substring(0, index) +
+                                        '<span class="number' + next + '">' + parts[j] + '</span>' +
+                                        text.substring(index + parts[j].length);
+                                    notes[k].innerHTML = text;
+                                }
+                            }
+
+                            numbers[parts[j]] = next;
+                            next++;
+                        }
+                        var n = numbers[parts[j]];
+                        parts[j] = '<span class="number' + n + '">' + parts[j] + '</span>';
+                    }
+                    tds[i].innerHTML = parts.join('<br>');
+                }
+            }
+            var spans = document.getElementsByTagName('span');
+            for (var i = 0; i < spans.length; i++) {
+                spans[i].addEventListener('mouseenter', function (event) {
+                    var matches = document.getElementsByClassName(event.target.className);
+                    for (var j = 0; j < matches.length; j++) {
+                        matches[j].parentElement.style.backgroundColor = 'palegreen';
+                    }
+                });
+                spans[i].addEventListener('mouseleave', function (event) {
+                    var matches = document.getElementsByClassName(event.target.className);
+                    for (var j = 0; j < matches.length; j++) {
+                        matches[j].parentElement.style.backgroundColor = '';
+                    }
+                });
+            }
+        };
+        window.schedule.setupDragDrop = function () {
+            var tds = document.getElementsByTagName('td');
+            for (var i = 0; i < tds.length; i++) {
+                (function (cell) {
+                    var slots = cell.getAttribute('data-slots-available');
+                    if (!slots)
+                        return;
+                    if (slots == '0') {
+                        cell.addEventListener('dragstart', function (e) {
+                            e.dataTransfer.setData('instructor-name', cell.getAttribute('data-instructor-name'));
+                            e.dataTransfer.setData('instructor-course-index', cell.getAttribute('data-instructor-course-index'));
+                            e.dataTransfer.dropEffect = 'move';
+                        });
+                    } else {
+                        cell.addEventListener('dragover', function (e) {
+                            e.preventDefault();
+                        });
+                        cell.addEventListener('dragenter', function (e) {
+                            e.preventDefault();
+                        });
+                        cell.addEventListener('drop', function (e) {
+                            var instructorName = e.dataTransfer.getData('instructor-name');
+                            var instructorCourseIndex = Number(e.dataTransfer.getData('instructor-course-index'));
+                            var targetTime = cell.getAttribute('data-time-name');
+                            var targetRoom = cell.getAttribute('data-room-name');
+                            schedule.slotsNeeded(instructorName, instructorCourseIndex, targetTime, function (slotsNeeded) {
+                                if (slotsNeeded > slots)
+                                    return;
+                                console.log('moving', instructorName, instructorCourseIndex, 'to', targetRoom, targetTime);
+                                schedule.current[instructorName][instructorCourseIndex][1] = targetRoom;
+                                schedule.current[instructorName][instructorCourseIndex][2] = targetTime;
+                                var s = JSON.stringify(schedule.current);
+                                schedule.setSchedule(s);
+                                schedule.canonicalOutput(s, function (out) {
+                                    var elt = document.createElement('a');
+                                    elt.href = 'data:attachment/text,' + encodeURI(out);
+                                    elt.target = '_blank';
+                                    elt.download = 'revised-schedule.json';
+                                    elt.appendChild(document.createTextNode('Click here to download revised schedule'));
+                                    var p = document.getElementById('download');
+                                    while (p.firstChild)
+                                        p.removeChild(p.firstChild);
+                                    p.appendChild(elt);
+                                });
+                            });
+                        });
+                    }
+                })(tds[i]);
+            }
+        };
+        const go = new Go();
+        var scheduletxt;
+        var schedulejson;
+        
+        WebAssembly.instantiateStreaming(fetch("schedule.wasm"), go.importObject)
+        .then((result) => {
+            go.run(result.instance);
+            return fetch('schedule.txt', {cache: 'no-store'});
+        }).then((response) => {
+            return response.text();
+        }).then((text) => {
+            scheduletxt = text;
+            return fetch('schedule.json', {cache: 'no-store'});
+        }).then((response) => {
+            return response.text();
+        }).then((text) => {
+            schedulejson = text;
+            schedule.original = JSON.parse(schedulejson)
+            schedule.current = JSON.parse(schedulejson)
+            schedule.setSchedule(schedulejson, scheduletxt);
+        });
+    })();
+</script>
+</body>
+</html>

@@ -286,3 +286,90 @@ func (old Schedule) Clone() Schedule {
 		Badness:    old.Badness,
 	}
 }
+
+func (data *InputData) PrintSchedule(schedule Schedule) {
+	nameLen := 0
+	for _, instructor := range data.Instructors {
+		if len(instructor.Name) > nameLen {
+			nameLen = len(instructor.Name)
+		}
+		for _, course := range instructor.Courses {
+			if len(course.Name) > nameLen {
+				nameLen = len(course.Name)
+			}
+		}
+	}
+	roomLen := 0
+	for _, r := range data.Rooms {
+		if len(r.Name) > roomLen {
+			roomLen = len(r.Name)
+		}
+	}
+	if roomLen > nameLen {
+		nameLen = roomLen
+	}
+	timeLen := 0
+	for _, t := range data.Times {
+		if len(t.Name) > timeLen {
+			timeLen = len(t.Name)
+		}
+	}
+
+	hyphens := ""
+	dots := ""
+	for i := 0; i < nameLen; i++ {
+		hyphens += "-"
+		dots += "."
+	}
+	fmt.Printf("%*s ", timeLen, "")
+	for _, r := range data.Rooms {
+		pad := (nameLen - roomLen) / 2
+		fmt.Printf("  %*s%-*s ", pad, "", nameLen-pad, r.Name)
+	}
+	fmt.Println()
+	for t, telt := range data.Times {
+		fmt.Printf("%*s ", timeLen, "")
+		for r := range data.Rooms {
+			cell := schedule.RoomTimes[r][t]
+			switch {
+			case cell.IsSpillover:
+				fmt.Printf("+ %-*s ", nameLen, "")
+			default:
+				fmt.Printf("+-%s-", hyphens)
+			}
+		}
+		fmt.Println("+")
+		fmt.Printf("%*s ", timeLen, telt.Name)
+		for r := range data.Rooms {
+			cell := schedule.RoomTimes[r][t]
+			switch {
+			case cell.Course != nil && !cell.IsSpillover:
+				fmt.Printf("| %-*s ", nameLen, cell.Course.Instructor.Name)
+			default:
+				fmt.Printf("| %-*s ", nameLen, "")
+			}
+		}
+		fmt.Println("|")
+		fmt.Printf("%*s ", timeLen, "")
+		for r := range data.Rooms {
+			cell := schedule.RoomTimes[r][t]
+			switch {
+			case cell.Course != nil && !cell.IsSpillover:
+				fmt.Printf("| %-*s ", nameLen, cell.Course.Name)
+			default:
+				fmt.Printf("| %-*s ", nameLen, "")
+			}
+		}
+		fmt.Println("|")
+	}
+	fmt.Printf("%*s ", timeLen, "")
+	for range data.Rooms {
+		fmt.Printf("+-%s-", hyphens)
+	}
+	fmt.Println("+")
+	fmt.Println()
+	fmt.Printf("Total badness %d with the following known problems:\n", schedule.Badness)
+	for _, msg := range schedule.Problems {
+		fmt.Println("* " + msg)
+	}
+}

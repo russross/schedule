@@ -7,12 +7,10 @@ import (
 	"io"
 )
 
-type ScheduleJSON map[string][][]string
-
 func (data *InputData) ReadJSON(r io.Reader) ([]Placement, error) {
 	// parse the JSON
 	decoder := json.NewDecoder(r)
-	var sched ScheduleJSON
+	var sched map[string][][]string
 	if err := decoder.Decode(&sched); err != nil {
 		return nil, err
 	}

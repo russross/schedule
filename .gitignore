@@ -1,6 +1,6 @@
 *.csv
 *.txt
-*.html
 *.swp
 *.json
+*.wasm
 schedule
