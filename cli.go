@@ -5,12 +5,14 @@ package main
 import (
 	"bufio"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,11 +24,11 @@ var (
 	workers              = runtime.NumCPU()
 	pin                  = 95.0
 	pindev               = 5.0
-	dur                  = 5 * time.Minute
-	warmup               = 15 * time.Second
+	dur                  = 10 * time.Minute
+	warmup               = 10 * time.Second
 	restartLocal         = 30 * time.Second
 	restartGlobal        = 60 * time.Second
-	maxSwapDepth         = 2
+	maxSwapDepth         = 4
 	restartAfterSwap     = false
 	prefix               = "schedule"
 	weightedWarmup       = false
@@ -90,6 +92,22 @@ func main() {
 	}
 	cmdScore.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
 	cmdSchedule.AddCommand(cmdScore)
+
+	cmdByCourse := &cobra.Command{
+		Use:   "bycourse",
+		Short: "print a schedule ordered by course",
+		Run:   CommandByCourse,
+	}
+	cmdByCourse.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
+	cmdSchedule.AddCommand(cmdByCourse)
+
+	cmdByInstructor := &cobra.Command{
+		Use:   "byinstructor",
+		Short: "print a schedule ordered by instructor",
+		Run:   CommandByInstructor,
+	}
+	cmdByInstructor.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
+	cmdSchedule.AddCommand(cmdByInstructor)
 
 	cmdSchedule.Execute()
 }
@@ -419,6 +437,153 @@ func CommandScore(cmd *cobra.Command, args []string) {
 
 	schedule := data.Score(placements)
 	data.PrintSchedule(schedule)
+}
+
+func CommandByCourse(cmd *cobra.Command, args []string) {
+	if len(args) > 0 {
+		log.Fatalf("unknown option: %s", strings.Join(args, " "))
+	}
+
+	// get the input data
+	lines, err := fetchFile(prefix + ".txt")
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// parse it
+	data, err := Parse(prefix+".txt", lines)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// read the schedule
+	fp, err := os.Open(prefix + ".json")
+	if err != nil {
+		if err == os.ErrNotExist {
+			log.Fatalf("the list of course placements must be in %s.json", prefix)
+		} else {
+			log.Fatalf("opening %s: %v", prefix+".json", err)
+		}
+	}
+	placements, err := data.ReadJSON(fp)
+	if err != nil {
+		log.Fatalf("reading %s: %v", prefix+".json", err)
+	}
+	if err = fp.Close(); err != nil {
+		log.Fatalf("closing %s: %v", prefix+".json", err)
+	}
+
+	courseToPlacements := make(map[string][]Placement)
+	var courseNames []string
+	courseLen, instructorLen, roomLen, timeLen := 0, 0, 0, 0
+	for _, placement := range placements {
+		name := placement.Course.Name
+		if len(placement.Course.Name) > courseLen {
+			courseLen = len(placement.Course.Name)
+		}
+		if len(placement.Course.Instructor.Name) > instructorLen {
+			instructorLen = len(placement.Course.Instructor.Name)
+		}
+		if len(data.Times[placement.Time].Name) > timeLen {
+			timeLen = len(data.Times[placement.Time].Name)
+		}
+		if len(data.Rooms[placement.Room].Name) > roomLen {
+			roomLen = len(data.Rooms[placement.Room].Name)
+		}
+		if _, present := courseToPlacements[name]; !present {
+			courseNames = append(courseNames, name)
+		}
+		courseToPlacements[name] = append(courseToPlacements[name], placement)
+	}
+	sort.Strings(courseNames)
+
+	fmt.Printf("Schedule by course:\n")
+	for _, name := range courseNames {
+		lst := courseToPlacements[name]
+		sort.Slice(lst, func(a, b int) bool {
+			if lst[a].Course.Instructor.Name != lst[b].Course.Instructor.Name {
+				return lst[a].Course.Instructor.Name < lst[b].Course.Instructor.Name
+			}
+			return data.Times[lst[a].Time].Name < data.Times[lst[b].Time].Name
+		})
+		for _, elt := range lst {
+			fmt.Printf("%*s  %*s  %-*s  %*s\n",
+				courseLen, elt.Course.Name,
+				timeLen, data.Times[elt.Time].Name,
+				instructorLen, elt.Course.Instructor.Name,
+				roomLen, data.Rooms[elt.Room].Name)
+		}
+	}
+}
+
+func CommandByInstructor(cmd *cobra.Command, args []string) {
+	if len(args) > 0 {
+		log.Fatalf("unknown option: %s", strings.Join(args, " "))
+	}
+
+	// get the input data
+	lines, err := fetchFile(prefix + ".txt")
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// parse it
+	data, err := Parse(prefix+".txt", lines)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// read the schedule
+	fp, err := os.Open(prefix + ".json")
+	if err != nil {
+		if err == os.ErrNotExist {
+			log.Fatalf("the list of course placements must be in %s.json", prefix)
+		} else {
+			log.Fatalf("opening %s: %v", prefix+".json", err)
+		}
+	}
+	placements, err := data.ReadJSON(fp)
+	if err != nil {
+		log.Fatalf("reading %s: %v", prefix+".json", err)
+	}
+	if err = fp.Close(); err != nil {
+		log.Fatalf("closing %s: %v", prefix+".json", err)
+	}
+
+	instructorToPlacements := make(map[string][]Placement)
+	courseLen, instructorLen, roomLen, timeLen := 0, 0, 0, 0
+	for _, placement := range placements {
+		name := placement.Course.Instructor.Name
+		if len(placement.Course.Name) > courseLen {
+			courseLen = len(placement.Course.Name)
+		}
+		if len(placement.Course.Instructor.Name) > instructorLen {
+			instructorLen = len(placement.Course.Instructor.Name)
+		}
+		if len(data.Times[placement.Time].Name) > timeLen {
+			timeLen = len(data.Times[placement.Time].Name)
+		}
+		if len(data.Rooms[placement.Room].Name) > roomLen {
+			roomLen = len(data.Rooms[placement.Room].Name)
+		}
+		instructorToPlacements[name] = append(instructorToPlacements[name], placement)
+	}
+
+	fmt.Printf("Schedule by instructor:\n")
+	for _, instructor := range data.Instructors {
+		lst := instructorToPlacements[instructor.Name]
+		for _, course := range instructor.Courses {
+			for _, elt := range lst {
+				if elt.Course == course {
+					fmt.Printf("%-*s  %*s  %*s  %*s\n",
+						instructorLen, elt.Course.Instructor.Name,
+						courseLen, elt.Course.Name,
+						roomLen, data.Rooms[elt.Room].Name,
+						timeLen, data.Times[elt.Time].Name)
+				}
+			}
+		}
+	}
 }
 
 func fetchFile(filename string) ([][]string, error) {
