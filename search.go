@@ -146,7 +146,7 @@ func CloneSectionList(original []*Section) []*Section {
 	return clone
 }
 
-func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacementList []Placement, localPin float64) []Placement {
+func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacementList []Placement, localPin float64, weightedLottery bool) []Placement {
 	// the schedule we are creating
 	var schedule []Placement
 
@@ -184,14 +184,31 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 
 		// do we need to run a lottery?
 		if r < 0 && t < 0 {
-			ticket := rand.Intn(section.Tickets)
+			ticket := 0
+			if weightedLottery {
+				ticket = rand.Intn(section.Tickets)
+			} else {
+				validSlots := 0
+				for _, times := range section.RoomTimes {
+					for _, badness := range times {
+						if badness >= 0 {
+							validSlots++
+						}
+					}
+				}
+				ticket = rand.Intn(validSlots)
+			}
 		lotteryLoop:
 			for room, times := range section.RoomTimes {
 				for time, badness := range times {
 					if badness < 0 {
 						continue
 					}
-					ticket -= (100 - badness)
+					if weightedLottery {
+						ticket -= (100 - badness)
+					} else {
+						ticket--
+					}
 					if ticket < 0 {
 						r, t = room, time
 						break lotteryLoop

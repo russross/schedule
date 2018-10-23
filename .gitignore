@@ -3,4 +3,5 @@
 *.swp
 *.json
 *.wasm
+*.js
 schedule

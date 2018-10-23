@@ -19,15 +19,18 @@ import (
 )
 
 var (
-	workers       = runtime.NumCPU()
-	pin           = 95.0
-	pindev        = 5.0
-	dur           = 5 * time.Minute
-	warmup        = 15 * time.Second
-	restartLocal  = 30 * time.Second
-	restartGlobal = 60 * time.Second
-	maxSwapDepth  = 2
-	prefix        = "schedule"
+	workers              = runtime.NumCPU()
+	pin                  = 95.0
+	pindev               = 5.0
+	dur                  = 5 * time.Minute
+	warmup               = 15 * time.Second
+	restartLocal         = 30 * time.Second
+	restartGlobal        = 60 * time.Second
+	maxSwapDepth         = 2
+	restartAfterSwap     = false
+	prefix               = "schedule"
+	weightedWarmup       = false
+	weightedOptimization = false
 )
 
 const (
@@ -65,6 +68,8 @@ func main() {
 	cmdGen.Flags().DurationVarP(&warmup, "warmup", "w", warmup, "time to spend finding best random schedule before refining it")
 	cmdGen.Flags().DurationVarP(&restartLocal, "restartlocal", "l", restartLocal, "restart after this long since finding a local best score")
 	cmdGen.Flags().DurationVarP(&restartGlobal, "restartglobal", "g", restartGlobal, "restart after this long since finding the global best score")
+	cmdGen.Flags().BoolVar(&weightedWarmup, "weightedwarmup", weightedWarmup, "bias course placement toward low-badness slots during warmup period")
+	cmdGen.Flags().BoolVar(&weightedOptimization, "weightedoptimization", weightedOptimization, "bias course placement toward low-badness slots during optimization period")
 	cmdSchedule.AddCommand(cmdGen)
 
 	cmdSwap := &cobra.Command{
@@ -75,6 +80,7 @@ func main() {
 	cmdSwap.Flags().IntVar(&workers, "workers", workers, "number of concurrent workers")
 	cmdSwap.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
 	cmdSwap.Flags().IntVarP(&maxSwapDepth, "max", "m", maxSwapDepth, "maximum number of swaps to attempt")
+	cmdSwap.Flags().BoolVarP(&restartAfterSwap, "restart", "r", restartAfterSwap, "restart after finding a successful swap")
 	cmdSchedule.AddCommand(cmdSwap)
 
 	cmdScore := &cobra.Command{
@@ -208,7 +214,9 @@ func CommandGen(cmd *cobra.Command, args []string) {
 				}
 
 				// generate a schedule
-				candidate := data.PlaceSections(sections, base, localPin)
+				weighted := mode == ModeWarmup && weightedWarmup ||
+					(mode == ModeLocalBest || mode == ModeGlobalBest) && weightedOptimization
+				candidate := data.PlaceSections(sections, base, localPin, weighted)
 				if len(candidate) == 0 {
 					mutex.Lock()
 					failedAttempts++
@@ -352,7 +360,7 @@ func CommandSwap(cmd *cobra.Command, args []string) {
 					if best.Badness < newBest.Badness {
 						log.Printf("swapping found a new best score of %d", best.Badness)
 						newBest = best
-						repeat = true
+						repeat = restartAfterSwap
 						writeJsonFile(data, prefix+".json", best.Placements)
 						data.PrintSchedule(newBest)
 					}
@@ -366,7 +374,11 @@ func CommandSwap(cmd *cobra.Command, args []string) {
 
 		if newBest.Badness < globalBest.Badness {
 			globalBest = newBest
-			log.Printf("swapping improved the score; starting over with new schedule as starting point")
+			if repeat {
+				log.Printf("swapping improved the score; starting over with new schedule as starting point")
+			} else {
+				log.Printf("swapping improved the score")
+			}
 		}
 	}
 }
