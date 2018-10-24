@@ -74,6 +74,19 @@ func main() {
 	cmdGen.Flags().BoolVar(&weightedOptimization, "weightedoptimization", weightedOptimization, "bias course placement toward low-badness slots during optimization period")
 	cmdSchedule.AddCommand(cmdGen)
 
+	cmdOpt := &cobra.Command{
+		Use:   "opt",
+		Short: "optimize the current schedule",
+		Run:   CommandOpt,
+	}
+	cmdOpt.Flags().IntVar(&workers, "workers", workers, "number of concurrent workers")
+	cmdOpt.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
+	cmdOpt.Flags().Float64VarP(&pin, "pin", "p", pin, "the mean percentage that a prior placement will be kept")
+	cmdOpt.Flags().Float64VarP(&pindev, "pindev", "d", pindev, "the stddev for how much to vary the pin between attempts")
+	cmdOpt.Flags().DurationVarP(&dur, "time", "t", dur, "total time to spend searching")
+	cmdOpt.Flags().BoolVar(&weightedOptimization, "weightedoptimization", weightedOptimization, "bias course placement toward low-badness slots during optimization period")
+	cmdSchedule.AddCommand(cmdOpt)
+
 	cmdSwap := &cobra.Command{
 		Use:   "swap",
 		Short: "optimize a schedule by swapping courses",
@@ -288,6 +301,143 @@ func CommandGen(cmd *cobra.Command, args []string) {
 					}
 				}
 
+				mutex.Unlock()
+			}
+			wg.Done()
+		}(worker)
+	}
+	wg.Wait()
+	log.Printf("%d successful and %d failed attempts in %v", successfullAttempts, failedAttempts, time.Since(startTime))
+}
+
+func CommandOpt(cmd *cobra.Command, args []string) {
+	if len(args) > 0 {
+		log.Fatalf("unknown option: %s", strings.Join(args, " "))
+	}
+
+	if workers < 1 {
+		log.Fatalf("workers must be >= 1")
+	}
+	if pin < 0.0 || pin > 100.0 {
+		log.Fatalf("pin must be between 0 and 100")
+	}
+	if pindev < 0.0 {
+		log.Fatalf("pindev must be >= 0")
+	}
+	if dur <= 0 {
+		log.Fatalf("time must be > 0")
+	}
+	if restartGlobal <= 0 {
+		log.Fatalf("restartglobal time must be > 0")
+	}
+
+	// get the input data
+	lines, err := fetchFile(prefix + ".txt")
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// parse it
+	data, err := Parse(prefix+".txt", lines)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// generate the list of sections and constraints
+	sections := data.MakeSectionList()
+	startTime := time.Now()
+	lastReport := startTime
+
+	// read the starting schedule
+	fp, err := os.Open(prefix + ".json")
+	if err != nil {
+		if err == os.ErrNotExist {
+			log.Fatalf("the list of course placements must be in %s.json", prefix)
+		} else {
+			log.Fatalf("opening %s: %v", prefix+".json", err)
+		}
+	}
+	placements, err := data.ReadJSON(fp)
+	if err != nil {
+		log.Fatalf("reading %s: %v", prefix+".json", err)
+	}
+	if err = fp.Close(); err != nil {
+		log.Fatalf("closing %s: %v", prefix+".json", err)
+	}
+
+	globalBest := data.Score(placements)
+	data.PrintSchedule(globalBest)
+	log.Printf("attempting to optimize the schedule with no restarts")
+
+	//
+	// start the main search
+	//
+	var wg sync.WaitGroup
+	var mutex sync.Mutex
+
+	successfullAttempts := 0
+	failedAttempts := 0
+
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(workerN int) {
+			for {
+				if time.Since(startTime) > dur {
+					break
+				}
+
+				mutex.Lock()
+				if time.Since(lastReport) >= reportInterval {
+					lastReport = lastReport.Add(reportInterval)
+					log.Printf("so far: %d runs in %v, badness score of %d",
+						successfullAttempts+failedAttempts,
+						lastReport.Sub(startTime),
+						globalBest.Badness)
+				}
+
+				base := globalBest.Placements
+				mutex.Unlock()
+
+				// the pin value to use for this round
+				var localPin float64
+				switch {
+				case pin >= 100.0:
+					localPin = 100.0
+				case pin <= 0.0:
+					localPin = 0.0
+				default:
+					localPin = -1.0
+					for localPin >= 100.0 || localPin < 0.0 {
+						localPin = rand.NormFloat64()*pindev + pin
+					}
+				}
+
+				// generate a schedule
+				weighted := weightedOptimization
+				candidate := data.PlaceSections(sections, base, localPin, weighted)
+				if len(candidate) == 0 {
+					mutex.Lock()
+					failedAttempts++
+					mutex.Unlock()
+					continue
+				}
+
+				// score it
+				schedule := data.Score(candidate)
+
+				// see how it compares
+				mutex.Lock()
+				successfullAttempts++
+
+				if schedule.Badness < globalBest.Badness {
+					// new global best? always keep it
+					globalBest = schedule
+					log.Printf("global best of %d found (pin %.1f)", schedule.Badness, localPin)
+					data.PrintSchedule(schedule)
+
+					// write schedule to .json file
+					writeJsonFile(data, prefix+".json", candidate)
+				}
 				mutex.Unlock()
 			}
 			wg.Done()
