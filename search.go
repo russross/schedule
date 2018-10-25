@@ -11,6 +11,7 @@ type Section struct {
 	Course    *Course
 	RoomTimes [][]int
 	Tickets   int
+	Count     int
 }
 
 // A Placement represents a course assigned to a room and time
@@ -36,6 +37,7 @@ func (data *InputData) MakeSectionList() []*Section {
 				Course:    course,
 				RoomTimes: make([][]int, len(data.Rooms)),
 				Tickets:   0,
+				Count:     0,
 			}
 			for i := range section.RoomTimes {
 				section.RoomTimes[i] = make([]int, len(data.Times))
@@ -109,12 +111,13 @@ func (data *InputData) MakeSectionList() []*Section {
 					section.RoomTimes[roomIndex][timeIndex] = badness
 					if badness >= 0 {
 						section.Tickets += 100 - badness
+						section.Count++
 					}
 				}
 			}
 
 			// it must be possible to place the section somewhere
-			if section.Tickets == 0 {
+			if section.Tickets == 0 || section.Count == 0 {
 				log.Fatalf("no valid room/time combinations found for %s taught by %s", course.Name, instructor.Name)
 			}
 		}
@@ -122,7 +125,7 @@ func (data *InputData) MakeSectionList() []*Section {
 
 	// sort from most to least constrained
 	sort.Slice(sections, func(a, b int) bool {
-		return sections[a].Tickets < sections[b].Tickets
+		return sections[a].Count < sections[b].Count
 	})
 
 	return sections
@@ -140,6 +143,7 @@ func CloneSectionList(original []*Section) []*Section {
 			Course:    section.Course,
 			RoomTimes: roomTimes,
 			Tickets:   section.Tickets,
+			Count:     section.Count,
 		}
 		clone = append(clone, sectionCopy)
 	}
@@ -184,20 +188,11 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 
 		// do we need to run a lottery?
 		if r < 0 && t < 0 {
-			ticket := 0
-			if weightedLottery {
-				ticket = rand.Intn(section.Tickets)
-			} else {
-				validSlots := 0
-				for _, times := range section.RoomTimes {
-					for _, badness := range times {
-						if badness >= 0 {
-							validSlots++
-						}
-					}
-				}
-				ticket = rand.Intn(validSlots)
+			ticketMax := section.Tickets
+			if !weightedLottery {
+				ticketMax = section.Count
 			}
+			ticket := rand.Intn(ticketMax)
 		lotteryLoop:
 			for room, times := range section.RoomTimes {
 				for time, badness := range times {
@@ -255,7 +250,7 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 			}
 
 			// did this make the schedule impossible?
-			if other.Tickets <= 0 {
+			if other.Tickets <= 0 || other.Count <= 0 {
 				/*
 					log.Printf("placing %s %s at %s in %s made placing %s %s impossible",
 						section.Course.Instructor.Name, section.Course.Name,
@@ -266,7 +261,7 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 			}
 
 			// update this section's placement priority based on the new ticket count
-			for i := otherIndex - 1; i >= sectionIndex+1 && sections[i+1].Tickets < sections[i].Tickets; i-- {
+			for i := otherIndex - 1; i >= sectionIndex+1 && sections[i+1].Count < sections[i].Count; i-- {
 				sections[i+1], sections[i] = sections[i], sections[i+1]
 			}
 		}
@@ -286,8 +281,10 @@ func (section *Section) BlockRoomTime(r, t, badness int, times []*Time) {
 		if old >= 0 && (badness < 0 || badness > old) {
 			section.RoomTimes[r][t-i] = badness
 			section.Tickets -= 100 - old
+			section.Count--
 			if badness >= 0 {
 				section.Tickets += 100 - badness
+				section.Count++
 			}
 		}
 	}
