@@ -120,7 +120,7 @@ few notes:
     slots in that group, so the evening times are ignored when
     considering day groupings.
 
-I
+
 ### Instructors and courses
 
 Here is an example entry for a faculty member:

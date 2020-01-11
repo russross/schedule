@@ -93,6 +93,7 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 	var time *Time
 
 	// parsing data that does not make it into the InputData struct
+	instructorNames := make(map[string]bool)
 	rooms := make(map[string]*Room)
 	times := make(map[string]*Time)
 	tagToRooms := make(map[string][]*Room)
@@ -137,6 +138,11 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 			if instructor, err = data.ParseInstructor(fields, times, tagToTimes); err != nil {
 				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
 			}
+			if instructorNames[instructor.Name] {
+				return nil, fmt.Errorf("%q line %d: cannot have two instructors with the same name %q",
+					filename, linenumber+1, instructor.Name)
+			}
+			instructorNames[instructor.Name] = true
 
 		case "course:":
 			if _, err = data.ParseCourse(fields, instructor, rooms, times, tagToRooms, tagToTimes); err != nil {

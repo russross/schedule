@@ -31,8 +31,11 @@ var (
 	maxSwapDepth         = 4
 	restartAfterSwap     = false
 	prefix               = "schedule"
+	scoreInName          = false
 	weightedWarmup       = false
 	weightedOptimization = false
+	hostname             = "UNKNOWN"
+	prevFile             = ""
 )
 
 const (
@@ -48,6 +51,11 @@ const (
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	log.SetFlags(log.Ltime)
+	if host, err := os.Hostname(); err != nil {
+		log.Fatalf("getting hostname: %v", err)
+	} else {
+		hostname = host
+	}
 
 	cmdSchedule := &cobra.Command{
 		Use:   "schedule",
@@ -64,6 +72,7 @@ func main() {
 	}
 	cmdGen.Flags().IntVar(&workers, "workers", workers, "number of concurrent workers")
 	cmdGen.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
+	cmdGen.Flags().BoolVar(&scoreInName, "scorename", scoreInName, "name the output file <prefix>-<score>.json")
 	cmdGen.Flags().Float64VarP(&pin, "pin", "p", pin, "the mean percentage that a prior placement will be kept")
 	cmdGen.Flags().Float64VarP(&pindev, "pindev", "d", pindev, "the stddev for how much to vary the pin between attempts")
 	cmdGen.Flags().DurationVarP(&dur, "time", "t", dur, "total time to spend searching")
@@ -81,6 +90,7 @@ func main() {
 	}
 	cmdOpt.Flags().IntVar(&workers, "workers", workers, "number of concurrent workers")
 	cmdOpt.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
+	cmdOpt.Flags().BoolVar(&scoreInName, "scorename", scoreInName, "name the output file <prefix>-<score>.json")
 	cmdOpt.Flags().Float64VarP(&pin, "pin", "p", pin, "the mean percentage that a prior placement will be kept")
 	cmdOpt.Flags().Float64VarP(&pindev, "pindev", "d", pindev, "the stddev for how much to vary the pin between attempts")
 	cmdOpt.Flags().DurationVarP(&dur, "time", "t", dur, "total time to spend searching")
@@ -94,6 +104,7 @@ func main() {
 	}
 	cmdSwap.Flags().IntVar(&workers, "workers", workers, "number of concurrent workers")
 	cmdSwap.Flags().StringVar(&prefix, "prefix", prefix, "file name prefix (.txt, and .json suffixes will be added)")
+	cmdSwap.Flags().BoolVar(&scoreInName, "scorename", scoreInName, "name the output file <prefix>-<score>.json")
 	cmdSwap.Flags().IntVarP(&maxSwapDepth, "max", "m", maxSwapDepth, "maximum number of swaps to attempt")
 	cmdSwap.Flags().BoolVarP(&restartAfterSwap, "restart", "r", restartAfterSwap, "restart after finding a successful swap")
 	cmdSchedule.AddCommand(cmdSwap)
@@ -281,7 +292,7 @@ func CommandGen(cmd *cobra.Command, args []string) {
 					data.PrintSchedule(schedule)
 
 					// write schedule to .json file
-					writeJsonFile(data, prefix+".json", candidate)
+					writeJsonFile(data, candidate, schedule.Badness)
 				} else if schedule.Badness < localBest.Badness {
 					// new local best?
 					switch {
@@ -436,7 +447,7 @@ func CommandOpt(cmd *cobra.Command, args []string) {
 					data.PrintSchedule(schedule)
 
 					// write schedule to .json file
-					writeJsonFile(data, prefix+".json", candidate)
+					writeJsonFile(data, candidate, schedule.Badness)
 				}
 				mutex.Unlock()
 			}
@@ -525,12 +536,12 @@ func CommandSwap(cmd *cobra.Command, args []string) {
 					best := data.SearchSwaps(sections, globalBest, maxSwapDepth, n)
 
 					mutex.Lock()
-					if best.Badness < newBest.Badness {
+					if best.Badness < newBest.Badness && len(best.Placements) > 0 {
 						log.Printf("swapping found a new best score of %d", best.Badness)
 						newBest = best
 						repeat = restartAfterSwap
-						writeJsonFile(data, prefix+".json", best.Placements)
 						data.PrintSchedule(newBest)
+						writeJsonFile(data, best.Placements, best.Badness)
 					}
 					mutex.Unlock()
 				}
@@ -793,8 +804,12 @@ func fetchFile(filename string) ([][]string, error) {
 	return lines, nil
 }
 
-func writeJsonFile(data *InputData, filename string, placements []Placement) {
-	tmpFile := filename + ".tmp"
+func writeJsonFile(data *InputData, placements []Placement, badness int) {
+	filename := fmt.Sprintf("%s.json", prefix)
+	if scoreInName {
+		filename = fmt.Sprintf("%s-%d.json", prefix, badness)
+	}
+	tmpFile := fmt.Sprintf("%s.%s.tmp", filename, hostname)
 	fp, err := os.Create(tmpFile)
 	if err != nil {
 		log.Fatalf("creating %s: %v", tmpFile, err)
@@ -808,5 +823,10 @@ func writeJsonFile(data *InputData, filename string, placements []Placement) {
 	if err = os.Rename(tmpFile, filename); err != nil {
 		log.Fatalf("renaming %s to %s: %v", tmpFile, filename, err)
 	}
-
+	if prevFile != "" && prevFile != filename {
+		if err = os.Remove(prevFile); err != nil && err != os.ErrNotExist {
+			log.Printf("deleting previous file: %v", err)
+		}
+	}
+	prevFile = filename
 }

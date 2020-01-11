@@ -187,6 +187,9 @@ func (data *InputData) Score(placements []Placement) Schedule {
 				gap = -gap
 			}
 			badness := 10 * gap
+			if instructor.Days > len(onDay) {
+				badness *= 2
+			}
 			wanted := "s"
 			if instructor.Days == 1 {
 				wanted = ""
