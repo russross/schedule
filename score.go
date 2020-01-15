@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // A Schedule is a two-dimensional view of the placed sections,
@@ -56,7 +57,7 @@ func (data *InputData) Score(placements []Placement) Schedule {
 			}
 
 			// is this a bad time for this course?
-			if len(courseA.Times) > 0 {
+			if len(courseA.Times) > 0 && !isSpilloverA {
 				if badness := courseA.Times[t]; badness != 0 {
 					if badness < 0 || badness >= 100 {
 						badness = Impossible
@@ -125,10 +126,14 @@ func (data *InputData) Score(placements []Placement) Schedule {
 	// check how many rooms the instructor is assigned to
 	// check how spread out the instructor's schedule is
 	// check the split of an instructor's classes across days
+	// group all of the placements for courses with multiple sections
 	instructorToPlacements := make(map[*Instructor][]Placement)
+	courseToPlacements := make(map[string][]Placement)
 	for _, placement := range placements {
 		lst := instructorToPlacements[placement.Course.Instructor]
 		instructorToPlacements[placement.Course.Instructor] = append(lst, placement)
+		lst = courseToPlacements[placement.Course.Name]
+		courseToPlacements[placement.Course.Name] = append(lst, placement)
 	}
 
 	// check each instructor's schedule for niceness
@@ -256,6 +261,70 @@ func (data *InputData) Score(placements []Placement) Schedule {
 					instructor.Name, badness)
 				problems = append(problems, Problem{Message: msg, Badness: badness})
 			}
+		}
+	}
+
+	// check for sections being spread out
+	for courseName, placements := range courseToPlacements {
+		if len(placements) < 2 {
+			continue
+		}
+
+		// count up sections in MW vs TR and AM vs PM
+		mw, tr, am, pm := 0, 0, 0, 0
+		for _, placement := range placements {
+			t := data.Times[placement.Time]
+			prefix := strings.ToLower(t.Prefix())
+			if prefix == "mwf" {
+				prefix = "mw"
+			}
+			if prefix != "mw" && prefix != "tr" {
+				continue
+			}
+			brk := strings.IndexAny(t.Name, "0123456789")
+			if brk < 0 {
+				continue
+			}
+			hour := t.Name[brk:]
+			if len(hour) != 4 || hour > "1630" {
+				continue
+			}
+			if hour < "1200" {
+				am++
+			} else {
+				pm++
+			}
+			if prefix == "mw" {
+				mw++
+			} else {
+				tr++
+			}
+		}
+		if am+pm < 2 {
+			continue
+		}
+
+		// having at least one section on each day is important
+		if mw == 0 || tr == 0 {
+			badness := 10
+			missing := "MW(F)"
+			if tr == 0 {
+				missing = "TR"
+			}
+			msg := fmt.Sprintf("section distribution: %s has multiple sections but none on %s (badness %d)",
+				courseName, missing, badness)
+			problems = append(problems, Problem{Message: msg, Badness: badness})
+		}
+
+		if am == 0 || pm == 0 {
+			badness := 5
+			missing := "morning"
+			if pm == 0 {
+				missing = "afternoon"
+			}
+			msg := fmt.Sprintf("section distribution: %s has multiple sections but none in the %s (badness %d)",
+				courseName, missing, badness)
+			problems = append(problems, Problem{Message: msg, Badness: badness})
 		}
 	}
 

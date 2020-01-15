@@ -272,8 +272,22 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 
 func (section *Section) BlockRoomTime(r, t, badness int, times []*Time) {
 	slots := section.Course.SlotsNeeded(times[t])
+
+	// hack alert: for studio classes (the only kind that need multiple slots)
+	// assume 3 is the max needed
+	if slots == 2 {
+		slots = 3
+	}
+
 	for i := 0; i < slots && t-i >= 0; i++ {
 		if i > 0 && times[t-i].Next != times[t-i+1] {
+			break
+		}
+
+		// see how many slots it would require if it started at this
+		// time--it's possible we've gone back too far
+		needed := section.Course.SlotsNeeded(times[t-i])
+		if i >= needed {
 			break
 		}
 

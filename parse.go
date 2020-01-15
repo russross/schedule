@@ -60,6 +60,12 @@ func (t *Time) Prefix() string {
 	if brk < 0 {
 		return ""
 	}
+
+	// hack alert: merging mwf and mw by only considering 1st two letters of prefix
+	if brk > 2 {
+		brk = 2
+	}
+
 	return t.Name[:brk]
 }
 
@@ -74,11 +80,13 @@ func (c *Course) SlotsNeeded(t *Time) int {
 	}
 
 	// 23 marks studio format classes,
-	// which need 3 slots on MWF and 2 on TR
-	switch t.Prefix() {
-	case "MWF":
+	// which need 3 slots on MWF, 2 on TR or MW
+	switch {
+	case strings.HasPrefix(t.Name, "MWF"):
 		return 3
-	case "TR":
+	case strings.HasPrefix(t.Name, "MW"):
+		return 2
+	case strings.HasPrefix(t.Name, "TR"):
 		return 2
 	default:
 		return 23
