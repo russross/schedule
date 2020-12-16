@@ -277,39 +277,6 @@ the course will be pinned in place and not allowed to move.
 The pin is randomized each time a schedule is generated, with "pin"
 being the mean and "pindev" as its standard deviation. The default
 parameters of 95 and 5, respectively, mean that on each run a new
-pin (usually near 95) will be chosen. Each time the system goes to
-place a course, it will randomly choose to retain the old placement
-if possible (if the 
-The "pin" parameter determines how likely it is that an existing
-placement will be retained for a course vs. randomizing that
-course's placement. A high pin percentage means it is likely that
-the course will be pinned in place and not allowed to move.
-
-The pin is randomized each time a schedule is generated, with "pin"
-being the mean and "pindev" as its standard deviation. The default
-parameters of 95 and 5, respectively, mean that on each run a new
-pin (usually near 95) will be chosen. Each time the system goes to
-place a course, it will randomly choose to retain the old placement
-if possible (if the 
-The "pin" parameter determines how likely it is that an existing
-placement will be retained for a course vs. randomizing that
-course's placement. A high pin percentage means it is likely that
-the course will be pinned in place and not allowed to move.
-
-The pin is randomized each time a schedule is generated, with "pin"
-being the mean and "pindev" as its standard deviation. The default
-parameters of 95 and 5, respectively, mean that on each run a new
-pin (usually near 95) will be chosen. Each time the system goes to
-place a course, it will randomly choose to retain the old placement
-if possible (if the 
-The "pin" parameter determines how likely it is that an existing
-placement will be retained for a course vs. randomizing that
-course's placement. A high pin percentage means it is likely that
-the course will be pinned in place and not allowed to move.
-
-The pin is randomized each time a schedule is generated, with "pin"
-being the mean and "pindev" as its standard deviation. The default
-parameters of 95 and 5, respectively, mean that on each run a new
 pin (usually near 95) will be chosen. Say this value is 93. Each
 time the system goes to place a course, it will roll the dice and
 choose to retain the old placement if possible (if the value rolled
@@ -317,7 +284,7 @@ is less than 93) or it will discard the old placement and randomly
 choose a valid slot otherwise.
 
 Generally high pin values allow it to "tweak" a schedule layout,
-which low pin values will tend to shuffle it more dramatically.
+while low pin values will tend to shuffle it more dramatically.
 
 The same process applies for the "opt" subcommand, except that it
 always starts with the current `schedule.json` (no warmup period)

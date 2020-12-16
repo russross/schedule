@@ -36,6 +36,7 @@ var (
 	weightedOptimization = false
 	hostname             = "UNKNOWN"
 	prevFile             = ""
+	verbose              = false
 )
 
 const (
@@ -81,6 +82,7 @@ func main() {
 	cmdGen.Flags().DurationVarP(&restartGlobal, "restartglobal", "g", restartGlobal, "restart after this long since finding the global best score")
 	cmdGen.Flags().BoolVar(&weightedWarmup, "weightedwarmup", weightedWarmup, "bias course placement toward low-badness slots during warmup period")
 	cmdGen.Flags().BoolVar(&weightedOptimization, "weightedoptimization", weightedOptimization, "bias course placement toward low-badness slots during optimization period")
+	cmdGen.Flags().BoolVarP(&verbose, "verbose", "v", verbose, "verbose output")
 	cmdSchedule.AddCommand(cmdGen)
 
 	cmdOpt := &cobra.Command{

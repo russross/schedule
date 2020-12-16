@@ -251,12 +251,12 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 
 			// did this make the schedule impossible?
 			if other.Tickets <= 0 || other.Count <= 0 {
-				/*
+				if verbose {
 					log.Printf("placing %s %s at %s in %s made placing %s %s impossible",
 						section.Course.Instructor.Name, section.Course.Name,
 						data.Times[t].Name, data.Rooms[r].Name,
 						other.Course.Instructor.Name, other.Course.Name)
-				*/
+				}
 				return nil
 			}
 
