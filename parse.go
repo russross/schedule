@@ -166,7 +166,7 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 			return nil, fmt.Errorf("%q line %d: unknown line", filename, linenumber+1)
 		}
 	}
-	log.Printf("finding minimum possible number of rooms for each instructor")
+	//log.Printf("finding minimum possible number of rooms for each instructor")
 	for _, instructor := range data.Instructors {
 		instructor.FindMinRooms()
 	}

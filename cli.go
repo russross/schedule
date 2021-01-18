@@ -209,6 +209,7 @@ func CommandGen(cmd *cobra.Command, args []string) {
 				mutex.Lock()
 				if time.Since(lastReport) >= reportInterval {
 					lastReport = lastReport.Add(reportInterval)
+					data.PrintSchedule(globalBest)
 					log.Printf("so far: %d runs in %v, badness score of %d",
 						successfullAttempts+failedAttempts,
 						lastReport.Sub(startTime),
@@ -402,6 +403,7 @@ func CommandOpt(cmd *cobra.Command, args []string) {
 				mutex.Lock()
 				if time.Since(lastReport) >= reportInterval {
 					lastReport = lastReport.Add(reportInterval)
+					data.PrintSchedule(globalBest)
 					log.Printf("so far: %d runs in %v, badness score of %d",
 						successfullAttempts+failedAttempts,
 						lastReport.Sub(startTime),

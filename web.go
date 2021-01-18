@@ -13,13 +13,14 @@ import (
 const nbsp string = "\u00A0"
 
 var globalInputData *InputData
+var verbose bool
 
 func main() {
 	log.SetFlags(log.Ltime)
 	log.Println("main called")
-	js.Global().Get("schedule").Set("setSchedule", js.NewCallback(WasmSetSchedule))
-	js.Global().Get("schedule").Set("slotsNeeded", js.NewCallback(WasmSlotsNeeded))
-	js.Global().Get("schedule").Set("canonicalOutput", js.NewCallback(WasmCanonicalOutput))
+	js.Global().Get("schedule").Set("setSchedule", js.FuncOf(WasmSetSchedule))
+	js.Global().Get("schedule").Set("slotsNeeded", js.FuncOf(WasmSlotsNeeded))
+	js.Global().Get("schedule").Set("canonicalOutput", js.FuncOf(WasmCanonicalOutput))
 
 	// run forever
 	<-make(chan struct{})
@@ -28,17 +29,17 @@ func main() {
 // Call with the raw bytes of the schedule.txt file as the only argument.
 // Parses the InputData and stores it for future reference.
 // Should be called once at startup time.
-func WasmSetSchedule(args []js.Value) {
+func WasmSetSchedule(this js.Value, args []js.Value) interface{} {
 	switch {
 	case len(args) < 1 || len(args) > 2:
 		log.Printf("schedule.setSchedule: expected 1 or 2 arguments, found %d", len(args))
-		return
+		return nil
 	case len(args) == 1 && globalInputData == nil:
 		log.Printf("schedule.setSchedule: must be called with both schedule.json and schedule.txt on first call")
-		return
+		return nil
 	case len(args) == 2 && globalInputData != nil:
 		log.Printf("schedule.setSchedule: must only be called with schedule.json after first call")
-		return
+		return nil
 	}
 
 	// parse main schedule.txt input
@@ -52,13 +53,13 @@ func WasmSetSchedule(args []js.Value) {
 		}
 		if err := scanner.Err(); err != nil {
 			log.Printf("schedule.setSchedule: scanning schedule.txt input: %v", err)
-			return
+			return nil
 		}
 
 		data, err := Parse("schedule.txt", lines)
 		if err != nil {
 			log.Printf("schedule.setSchedule: parsing schedule.txt input: %v", err)
-			return
+			return nil
 		}
 		globalInputData = data
 		log.Println("schedule.setSchedule: schedule.txt ingested and parsed")
@@ -68,7 +69,7 @@ func WasmSetSchedule(args []js.Value) {
 	placements, err := globalInputData.ReadJSON(strings.NewReader(args[0].String()))
 	if err != nil {
 		log.Printf("schedule.score: parsing schedule.json input: %v", err)
-		return
+		return nil
 	}
 	schedule := globalInputData.Score(placements)
 
@@ -187,16 +188,18 @@ func WasmSetSchedule(args []js.Value) {
 	log.Printf("schedule.setSchedule: schedule rendered")
 	js.Global().Get("schedule").Call("setupHover")
 	js.Global().Get("schedule").Call("setupDragDrop")
+
+	return nil
 }
 
-func WasmSlotsNeeded(args []js.Value) {
+func WasmSlotsNeeded(this js.Value, args []js.Value) interface{} {
 	if len(args) != 4 {
 		log.Printf("schedule.slotsNeeded: expected 3 arguments, found %d", len(args))
-		return
+		return nil
 	}
 	if globalInputData == nil {
 		log.Printf("schedule.slotsNeeded: schedule.txt must be ingested before calling score")
-		return
+		return nil
 	}
 
 	instructorName := args[0].String()
@@ -210,7 +213,7 @@ func WasmSlotsNeeded(args []js.Value) {
 			// get the course
 			if courseIndex < 0 || courseIndex >= len(instructor.Courses) {
 				log.Printf("schedule.slotsNeeded: invalid course index %d for %s", courseIndex, instructorName)
-				return
+				return nil
 			}
 			course := instructor.Courses[courseIndex]
 
@@ -219,24 +222,26 @@ func WasmSlotsNeeded(args []js.Value) {
 				if t.Name == timeName {
 					slots := course.SlotsNeeded(t)
 					callback.Invoke(slots)
-					return
+					return nil
 				}
 			}
 			log.Printf("schedule.slotsNeeded: invalid time %q", timeName)
-			return
+			return nil
 		}
 	}
 	log.Printf("schedule.slotsNeeded: invalid instructor %q", instructorName)
+
+	return nil
 }
 
-func WasmCanonicalOutput(args []js.Value) {
+func WasmCanonicalOutput(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		log.Printf("schedule.canonicalOutput: expected 2 arguments, found %d", len(args))
-		return
+		return nil
 	}
 	if globalInputData == nil {
 		log.Printf("schedule.canonicalOutput: schedule.txt must be ingested before calling score")
-		return
+		return nil
 	}
 
 	raw := args[0].String()
@@ -245,15 +250,17 @@ func WasmCanonicalOutput(args []js.Value) {
 	placements, err := globalInputData.ReadJSON(strings.NewReader(raw))
 	if err != nil {
 		log.Printf("schedule.canonicalOutput: reading input JSON: %v", err)
-		return
+		return nil
 	}
 
 	builder := new(strings.Builder)
 	err = globalInputData.WriteJSON(builder, placements)
 	if err != nil {
 		log.Printf("schedule.canonicalOutput: writing JSON: %v", err)
-		return
+		return nil
 	}
 
 	callback.Invoke(builder.String())
+
+	return nil
 }

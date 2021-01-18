@@ -226,8 +226,8 @@ func (data *InputData) Score(placements []Placement) Schedule {
 
 							// is this gap too long?
 							if size > 1 {
-								// 2 => 4, 3 => 9, 4 => 16
-								badness += size * size
+								// 2 => 6, 3 => 12, 4 => 20
+								badness += size * (size + 1)
 							}
 
 							break
@@ -249,8 +249,8 @@ func (data *InputData) Score(placements []Placement) Schedule {
 							mismatch = -mismatch
 						}
 						if mismatch != 0 {
-							// 1 => 2, 3 => 2, 4 => 6, 5 => 12
-							badness += mismatch * (mismatch + 1)
+							// 1 => 4, 3 => 4, 4 => 9, 5 => 16
+							badness += (mismatch + 1) * (mismatch + 1)
 						}
 					}
 				}
