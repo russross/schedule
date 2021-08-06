@@ -179,7 +179,7 @@ func (data *InputData) Score(placements []Placement) Schedule {
 			// the most and fewest on a day
 			if gap := max - min; gap > 1 {
 				badness := gap * gap
-				msg := fmt.Sprintf("instructor convenience: %s has more classes on some days than others (badess %d)",
+				msg := fmt.Sprintf("instructor convenience: %s has more classes on some days than others (badness %d)",
 					instructor.Name, badness)
 				problems = append(problems, Problem{Message: msg, Badness: badness})
 			}
