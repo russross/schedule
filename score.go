@@ -46,14 +46,16 @@ func (data *InputData) Score(placements []Placement) Schedule {
 			isSpilloverA := grid[roomA][t].IsSpillover
 
 			// is this a bad time for this instructor?
-			if badness := courseA.Instructor.Times[t]; badness > 0 && badness < 100 {
-				msg := fmt.Sprintf("instructor time preference: %s has %s scheduled at %s (badness %d)",
-					courseA.Instructor.Name, courseA.Name, data.Times[t].Name, badness)
-				problems = append(problems, Problem{Message: msg, Badness: badness})
-			} else if badness < 0 || badness >= 100 {
-				msg := fmt.Sprintf("instructor not available: %s has %s scheduled at %s (badness %d)",
-					courseA.Instructor.Name, courseA.Name, data.Times[t].Name, Impossible)
-				problems = append(problems, Problem{Message: msg, Badness: Impossible})
+			for _, instructor := range courseA.Instructors {
+				if badness := instructor.Times[t]; badness > 0 && badness < 100 {
+					msg := fmt.Sprintf("instructor time preference: %s has %s scheduled at %s (badness %d)",
+						instructor.Name, courseA.Name, data.Times[t].Name, badness)
+					problems = append(problems, Problem{Message: msg, Badness: badness})
+				} else if badness < 0 || badness >= 100 {
+					msg := fmt.Sprintf("instructor not available: %s has %s scheduled at %s (badness %d)",
+						instructor.Name, courseA.Name, data.Times[t].Name, Impossible)
+					problems = append(problems, Problem{Message: msg, Badness: Impossible})
+				}
 			}
 
 			// is this a bad time for this course?
@@ -88,13 +90,17 @@ func (data *InputData) Score(placements []Placement) Schedule {
 				// are these taught by the same instructor?
 				// (note: we will never generate a schedule like this,
 				// but a user might propose one)
-				if courseA.Instructor == courseB.Instructor {
-					if !grid[roomA][t].IsSpillover || !grid[roomB][t].IsSpillover {
-						courses := []string{courseA.Name, courseB.Name}
-						sort.Strings(courses)
-						msg := fmt.Sprintf("instructor double booked: %s has courses %s and %s at %s (badness %d)",
-							courseA.Instructor.Name, courses[0], courses[1], data.Times[t].Name, Impossible)
-						problems = append(problems, Problem{Message: msg, Badness: Impossible})
+				for _, instructorA := range courseA.Instructors {
+					for _, instructorB := range courseB.Instructors {
+						if instructorA == instructorB {
+							if !grid[roomA][t].IsSpillover || !grid[roomB][t].IsSpillover {
+								courses := []string{courseA.Name, courseB.Name}
+								sort.Strings(courses)
+								msg := fmt.Sprintf("instructor double booked: %s has courses %s and %s at %s (badness %d)",
+									instructorA.Name, courses[0], courses[1], data.Times[t].Name, Impossible)
+								problems = append(problems, Problem{Message: msg, Badness: Impossible})
+							}
+						}
 					}
 				}
 
@@ -130,9 +136,11 @@ func (data *InputData) Score(placements []Placement) Schedule {
 	instructorToPlacements := make(map[*Instructor][]Placement)
 	courseToPlacements := make(map[string][]Placement)
 	for _, placement := range placements {
-		lst := instructorToPlacements[placement.Course.Instructor]
-		instructorToPlacements[placement.Course.Instructor] = append(lst, placement)
-		lst = courseToPlacements[placement.Course.Name]
+		for _, instructor := range placement.Course.Instructors {
+			lst := instructorToPlacements[instructor]
+			instructorToPlacements[instructor] = append(lst, placement)
+		}
+		lst := courseToPlacements[placement.Course.Name]
 		courseToPlacements[placement.Course.Name] = append(lst, placement)
 	}
 
@@ -363,12 +371,20 @@ func (old Schedule) Clone() Schedule {
 func (data *InputData) PrintSchedule(schedule Schedule) {
 	nameLen := 0
 	for _, instructor := range data.Instructors {
-		if len(instructor.Name) > nameLen {
-			nameLen = len(instructor.Name)
-		}
 		for _, course := range instructor.Courses {
 			if len(course.Name) > nameLen {
 				nameLen = len(course.Name)
+			}
+			if course.Instructors[0] == instructor {
+				if len(course.Instructors) > 1 {
+					if len(instructor.Name)+1 > nameLen {
+						nameLen = len(instructor.Name) + 1
+					}
+				} else {
+					if len(instructor.Name) > nameLen {
+						nameLen = len(instructor.Name)
+					}
+				}
 			}
 		}
 	}
@@ -417,7 +433,11 @@ func (data *InputData) PrintSchedule(schedule Schedule) {
 			cell := schedule.RoomTimes[r][t]
 			switch {
 			case cell.Course != nil && !cell.IsSpillover:
-				fmt.Printf("| %-*s ", nameLen, cell.Course.Instructor.Name)
+				instructorName := cell.Course.Instructors[0].Name
+				if len(cell.Course.Instructors) > 1 {
+					instructorName += "+"
+				}
+				fmt.Printf("| %-*s ", nameLen, instructorName)
 			default:
 				fmt.Printf("| %-*s ", nameLen, "")
 			}

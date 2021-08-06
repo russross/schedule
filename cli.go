@@ -646,8 +646,12 @@ func CommandByCourse(cmd *cobra.Command, args []string) {
 		if len(placement.Course.Name) > courseLen {
 			courseLen = len(placement.Course.Name)
 		}
-		if len(placement.Course.Instructor.Name) > instructorLen {
-			instructorLen = len(placement.Course.Instructor.Name)
+		instructorName := placement.Course.Instructors[0].Name
+		if len(placement.Course.Instructors) > 1 {
+			instructorName += "+"
+		}
+		if len(instructorName) > instructorLen {
+			instructorLen = len(instructorName)
 		}
 		if len(data.Times[placement.Time].Name) > timeLen {
 			timeLen = len(data.Times[placement.Time].Name)
@@ -666,16 +670,20 @@ func CommandByCourse(cmd *cobra.Command, args []string) {
 	for _, name := range courseNames {
 		lst := courseToPlacements[name]
 		sort.Slice(lst, func(a, b int) bool {
-			if lst[a].Course.Instructor.Name != lst[b].Course.Instructor.Name {
-				return lst[a].Course.Instructor.Name < lst[b].Course.Instructor.Name
+			if lst[a].Course.Instructors[0].Name != lst[b].Course.Instructors[0].Name {
+				return lst[a].Course.Instructors[0].Name < lst[b].Course.Instructors[0].Name
 			}
 			return data.Times[lst[a].Time].Name < data.Times[lst[b].Time].Name
 		})
 		for _, elt := range lst {
+			instructorName := elt.Course.Instructors[0].Name
+			if len(elt.Course.Instructors) > 1 {
+				instructorName += "+"
+			}
 			fmt.Printf("%*s  %*s  %-*s  %*s\n",
 				courseLen, elt.Course.Name,
 				timeLen, data.Times[elt.Time].Name,
-				instructorLen, elt.Course.Instructor.Name,
+				instructorLen, instructorName,
 				roomLen, data.Rooms[elt.Room].Name)
 		}
 	}
@@ -718,20 +726,22 @@ func CommandByInstructor(cmd *cobra.Command, args []string) {
 	instructorToPlacements := make(map[string][]Placement)
 	courseLen, instructorLen, roomLen, timeLen := 0, 0, 0, 0
 	for _, placement := range placements {
-		name := placement.Course.Instructor.Name
-		if len(placement.Course.Name) > courseLen {
-			courseLen = len(placement.Course.Name)
+		for _, instructor := range placement.Course.Instructors {
+			name := instructor.Name
+			if len(placement.Course.Name) > courseLen {
+				courseLen = len(placement.Course.Name)
+			}
+			if len(name) > instructorLen {
+				instructorLen = len(name)
+			}
+			if len(data.Times[placement.Time].Name) > timeLen {
+				timeLen = len(data.Times[placement.Time].Name)
+			}
+			if len(data.Rooms[placement.Room].Name) > roomLen {
+				roomLen = len(data.Rooms[placement.Room].Name)
+			}
+			instructorToPlacements[name] = append(instructorToPlacements[name], placement)
 		}
-		if len(placement.Course.Instructor.Name) > instructorLen {
-			instructorLen = len(placement.Course.Instructor.Name)
-		}
-		if len(data.Times[placement.Time].Name) > timeLen {
-			timeLen = len(data.Times[placement.Time].Name)
-		}
-		if len(data.Rooms[placement.Room].Name) > roomLen {
-			roomLen = len(data.Rooms[placement.Room].Name)
-		}
-		instructorToPlacements[name] = append(instructorToPlacements[name], placement)
 	}
 
 	fmt.Printf("Schedule by instructor:\n")
@@ -741,7 +751,7 @@ func CommandByInstructor(cmd *cobra.Command, args []string) {
 			for _, elt := range lst {
 				if elt.Course == course {
 					fmt.Printf("%-*s  %*s  %*s  %*s\n",
-						instructorLen, elt.Course.Instructor.Name,
+						instructorLen, instructor.Name,
 						courseLen, elt.Course.Name,
 						roomLen, data.Rooms[elt.Room].Name,
 						timeLen, data.Times[elt.Time].Name)

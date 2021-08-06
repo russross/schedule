@@ -33,6 +33,12 @@ func (data *InputData) MakeSectionList() []*Section {
 	var sections []*Section
 	for _, instructor := range data.Instructors {
 		for _, course := range instructor.Courses {
+			// for co-teaching courses, process based on the 1st-listed instructor
+			// to avoid duplication
+			if instructor != course.Instructors[0] {
+				continue
+			}
+
 			section := &Section{
 				Course:    course,
 				RoomTimes: make([][]int, len(data.Rooms)),
@@ -46,7 +52,7 @@ func (data *InputData) MakeSectionList() []*Section {
 
 			// in order for a time slot to be suitable:
 			// * the start slot must be okay for the course OR the course must not specify times
-			// * all slots the course occupies must be okay for the instructor
+			// * all slots the course occupies must be okay for all instructors
 			//
 			// the badness is the sum of the worst badness value from each slot used (capped at 99)
 			var courseTimes []int
@@ -59,7 +65,7 @@ func (data *InputData) MakeSectionList() []*Section {
 				}
 
 				// there must be enough slots starting at this time
-				// and the instructor must be available for all of them
+				// and the instructors must be available for all of them
 				slotsNeeded := course.SlotsNeeded(data.Times[i])
 				if i+slotsNeeded > len(data.Times) {
 					// this would run past the last time slot that exists
@@ -73,12 +79,14 @@ func (data *InputData) MakeSectionList() []*Section {
 						courseTimes = append(courseTimes, -1)
 						continue timeLoop
 					}
-					if instructor.Times[i+j] < 0 {
-						// the instructor cannot teach at this time
-						courseTimes = append(courseTimes, -1)
-						continue timeLoop
+					for _, coInstructor := range course.Instructors {
+						if coInstructor.Times[i+j] < 0 {
+							// an instructor cannot teach at this time
+							courseTimes = append(courseTimes, -1)
+							continue timeLoop
+						}
+						badness += coInstructor.Times[i+j]
 					}
-					badness += instructor.Times[i+j]
 				}
 
 				// badness caps at 99
@@ -214,8 +222,12 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 
 		// we must have a room and time by now
 		if r < 0 || t < 0 {
+			name := section.Course.Instructors[0].Name
+			if len(section.Course.Instructors) > 1 {
+				name += ", et al"
+			}
 			log.Fatalf("search failed to find a placement for %s taught by %s",
-				section.Course.Name, section.Course.Instructor.Name)
+				section.Course.Name, name)
 		}
 
 		// record the placement
@@ -232,10 +244,14 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 			}
 
 			// block out this time in all rooms for the same instructor
-			if other.Course.Instructor == section.Course.Instructor {
-				for room := range data.Rooms {
-					for i := 0; i < slots; i++ {
-						other.BlockRoomTime(room, t+i, -1, data.Times)
+			for _, thisInstructor := range section.Course.Instructors {
+				for _, otherInstructor := range other.Course.Instructors {
+					if otherInstructor == thisInstructor {
+						for room := range data.Rooms {
+							for i := 0; i < slots; i++ {
+								other.BlockRoomTime(room, t+i, -1, data.Times)
+							}
+						}
 					}
 				}
 			}
@@ -252,10 +268,18 @@ func (data *InputData) PlaceSections(readOnlySectionList []*Section, oldPlacemen
 			// did this make the schedule impossible?
 			if other.Tickets <= 0 || other.Count <= 0 {
 				if verbose {
+					thisName := section.Course.Instructors[0].Name
+					if len(section.Course.Instructors) > 1 {
+						thisName += ", et al"
+					}
+					otherName := other.Course.Instructors[0].Name
+					if len(other.Course.Instructors) > 1 {
+						otherName += ", et al"
+					}
 					log.Printf("placing %s %s at %s in %s made placing %s %s impossible",
-						section.Course.Instructor.Name, section.Course.Name,
+						thisName, section.Course.Name,
 						data.Times[t].Name, data.Rooms[r].Name,
-						other.Course.Instructor.Name, other.Course.Name)
+						otherName, other.Course.Name)
 				}
 				return nil
 			}
@@ -304,27 +328,6 @@ func (section *Section) BlockRoomTime(r, t, badness int, times []*Time) {
 	}
 }
 
-// sort a schedule by instructor, course
-func sortPlacements(placements []Placement) {
-	sort.Slice(placements, func(a, b int) bool {
-		if placements[a].Course.Instructor != placements[b].Course.Instructor {
-			return placements[a].Course.Instructor.Name < placements[b].Course.Instructor.Name
-		}
-		var ai, bi int
-		for ai = 0; ai < len(placements[a].Course.Instructor.Courses); ai++ {
-			if placements[a].Course.Instructor.Courses[ai] == placements[a].Course {
-				break
-			}
-		}
-		for bi = 0; bi < len(placements[b].Course.Instructor.Courses); bi++ {
-			if placements[b].Course.Instructor.Courses[bi] == placements[b].Course {
-				break
-			}
-		}
-		return ai < bi
-	})
-}
-
 func (data *InputData) MakeGrid(placements []Placement) [][]Cell {
 	roomTimes := make([][]Cell, len(data.Rooms))
 	for i := range roomTimes {
@@ -334,12 +337,20 @@ func (data *InputData) MakeGrid(placements []Placement) [][]Cell {
 	for _, placement := range placements {
 		slots := placement.Course.SlotsNeeded(data.Times[placement.Time])
 		for i := 0; i < slots; i++ {
-			if roomTimes[placement.Room][placement.Time+i].Course != nil {
+			otherCourse := roomTimes[placement.Room][placement.Time+i].Course
+			if otherCourse != nil {
+				thisName := placement.Course.Instructors[0].Name
+				if len(placement.Course.Instructors) > 1 {
+					thisName += ", et al"
+				}
+				otherName := otherCourse.Instructors[0].Name
+				if len(otherCourse.Instructors) > 1 {
+					otherName += ", et al"
+				}
 				log.Fatalf("%s %s cannot be scheduled at %s in %s because that slot is already used by %s %s",
-					placement.Course.Instructor.Name, placement.Course.Name,
+					thisName, placement.Course.Name,
 					data.Times[placement.Time].Name, data.Rooms[placement.Room].Name,
-					roomTimes[placement.Room][placement.Time+i].Course.Instructor.Name,
-					roomTimes[placement.Room][placement.Time+i].Course.Name)
+					otherName, otherCourse.Name)
 			}
 			roomTimes[placement.Room][placement.Time+i].Course = placement.Course
 			if i > 0 {

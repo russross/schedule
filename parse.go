@@ -42,12 +42,12 @@ type Instructor struct {
 }
 
 type Course struct {
-	Name       string
-	Instructor *Instructor
-	Rooms      []int
-	Times      []int
-	Slots      int
-	Conflicts  map[*Course]int
+	Name        string
+	Instructors []*Instructor
+	Rooms       []int
+	Times       []int
+	Slots       int
+	Conflicts   map[*Course]int
 }
 
 type Conflict struct {
@@ -106,6 +106,7 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 	times := make(map[string]*Time)
 	tagToRooms := make(map[string][]*Room)
 	tagToTimes := make(map[string][]*Time)
+	coInstructors := make(map[*Course][]string)
 
 	for linenumber, line := range lines {
 		var fields []string
@@ -153,7 +154,7 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 			instructorNames[instructor.Name] = true
 
 		case "course:":
-			if _, err = data.ParseCourse(fields, instructor, rooms, times, tagToRooms, tagToTimes); err != nil {
+			if _, err = data.ParseCourse(fields, instructor, rooms, times, tagToRooms, tagToTimes, coInstructors); err != nil {
 				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
 			}
 
@@ -166,6 +167,37 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 			return nil, fmt.Errorf("%q line %d: unknown line", filename, linenumber+1)
 		}
 	}
+
+	// expand coinstructors
+	for course, instructorNames := range coInstructors {
+		for _, instructorName := range instructorNames {
+			// watch out for dups
+			for _, elt := range course.Instructors {
+				if elt.Name == instructorName {
+					return nil, fmt.Errorf("instructor %q assigned twice (using coteach:) to the same course %q",
+						instructorName, course.Name)
+				}
+			}
+
+			// find the instructor
+			var instructor *Instructor
+			for _, elt := range data.Instructors {
+				if elt.Name == instructorName {
+					instructor = elt
+					break
+				}
+			}
+			if instructor == nil {
+				return nil, fmt.Errorf("instructor %q not found (listed as a coteach: for %q)",
+					instructorName, course.Name)
+			}
+
+			// link the instructor and the course both ways
+			course.Instructors = append(course.Instructors, instructor)
+			instructor.Courses = append(instructor.Courses, course)
+		}
+	}
+
 	//log.Printf("finding minimum possible number of rooms for each instructor")
 	for _, instructor := range data.Instructors {
 		instructor.FindMinRooms()
@@ -330,7 +362,7 @@ func (data *InputData) ParseInstructor(fields []string, times map[string]*Time, 
 	return instructor, nil
 }
 
-func (data *InputData) ParseCourse(fields []string, instructor *Instructor, rooms map[string]*Room, times map[string]*Time, tagToRooms map[string][]*Room, tagToTimes map[string][]*Time) (*Course, error) {
+func (data *InputData) ParseCourse(fields []string, instructor *Instructor, rooms map[string]*Room, times map[string]*Time, tagToRooms map[string][]*Room, tagToTimes map[string][]*Time, coInstructors map[*Course][]string) (*Course, error) {
 	if len(fields) < 2 {
 		log.Printf("expected %q", "course: name tag tag tag ...")
 		return nil, fmt.Errorf("parsing error")
@@ -339,11 +371,11 @@ func (data *InputData) ParseCourse(fields []string, instructor *Instructor, room
 		return nil, fmt.Errorf("course: must come after instructor")
 	}
 	course := &Course{
-		Name:       fields[1],
-		Instructor: instructor,
-		Rooms:      make([]int, len(rooms)),
-		Times:      make([]int, len(times)),
-		Conflicts:  make(map[*Course]int),
+		Name:        fields[1],
+		Instructors: []*Instructor{instructor},
+		Rooms:       make([]int, len(rooms)),
+		Times:       make([]int, len(times)),
+		Conflicts:   make(map[*Course]int),
 	}
 	for i := 0; i < len(course.Rooms); i++ {
 		// all rooms default to impossible
@@ -368,6 +400,10 @@ func (data *InputData) ParseCourse(fields []string, instructor *Instructor, room
 		if rawTag == "studio" {
 			// 2 for TR, 3 for MWF
 			course.Slots = 23
+			continue
+		}
+		if strings.HasPrefix(rawTag, "coteach:") {
+			coInstructors[course] = append(coInstructors[course], rawTag[len("coteach:"):])
 			continue
 		}
 
