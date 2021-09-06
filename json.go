@@ -24,6 +24,10 @@ func (data *InputData) ReadJSON(r io.Reader) ([]Placement, error) {
 				len(courseList), instructor.Name, len(instructor.Courses))
 		}
 		for i := 0; i < len(courseList); i++ {
+			// for co-teaching, use the first listed instructor as the canonical entry
+			if instructor.Courses[i].Instructors[0] != instructor {
+				continue
+			}
 			course := courseList[i]
 			if len(course) != 3 {
 				return nil, fmt.Errorf("malformed entry for course #%d of instructor %s", i+1, instructor.Name)

@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-// a Section is used during schedule creation
+// A Section is used during schedule creation
 type Section struct {
 	Course    *Course
 	RoomTimes [][]int

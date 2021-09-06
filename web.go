@@ -157,14 +157,14 @@ func WasmSetSchedule(this js.Value, args []js.Value) interface{} {
 				appendText(td, nbsp)
 			default:
 				var index int
-				for index = 0; index < len(cell.Course.Instructor.Courses); index++ {
-					if cell.Course == cell.Course.Instructor.Courses[index] {
+				for index = 0; index < len(cell.Course.Instructors[0].Courses); index++ {
+					if cell.Course == cell.Course.Instructors[0].Courses[index] {
 						break
 					}
 				}
 				td := appendElement(tr, "td")
 				td.Call("setAttribute", "data-time-name", t.Name)
-				td.Call("setAttribute", "data-instructor-name", cell.Course.Instructor.Name)
+				td.Call("setAttribute", "data-instructor-name", cell.Course.Instructors[0].Name)
 				td.Call("setAttribute", "data-instructor-course-index", index)
 				td.Call("setAttribute", "data-slots-available", 0)
 				td.Call("setAttribute", "draggable", "true")
@@ -172,7 +172,11 @@ func WasmSetSchedule(this js.Value, args []js.Value) interface{} {
 				if slots > 1 {
 					td.Call("setAttribute", "rowspan", slots)
 				}
-				appendText(td, cell.Course.Instructor.Name)
+				instructorName := cell.Course.Instructors[0].Name
+				if len(cell.Course.Instructors) > 1 {
+					instructorName += "+"
+				}
+				appendText(td, instructorName)
 				appendElement(td, "br")
 				appendText(td, cell.Course.Name)
 			}

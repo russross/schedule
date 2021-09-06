@@ -107,6 +107,7 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 	tagToRooms := make(map[string][]*Room)
 	tagToTimes := make(map[string][]*Time)
 	coInstructors := make(map[*Course][]string)
+	ignore := make(map[string]struct{})
 
 	for linenumber, line := range lines {
 		var fields []string
@@ -159,12 +160,27 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 			}
 
 		case "conflict:":
-			if err = data.ParseConflict(fields); err != nil {
+			if err = data.ParseConflict(fields, ignore); err != nil {
+				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "ignore:":
+			if err = data.ParseIgnore(fields, ignore); err != nil {
 				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
 			}
 
 		default:
 			return nil, fmt.Errorf("%q line %d: unknown line", filename, linenumber+1)
+		}
+	}
+
+	// make sure no ignored classes are actually being scheduled
+	for _, instructor := range data.Instructors {
+		for _, course := range instructor.Courses {
+			if _, present := ignore[course.Name]; present {
+				return nil, fmt.Errorf("instructor %q assigned to teach course %q, but that course is on the ignore list",
+					instructor.Name, course.Name)
+			}
 		}
 	}
 
@@ -477,7 +493,7 @@ func (data *InputData) ParseCourse(fields []string, instructor *Instructor, room
 	return course, nil
 }
 
-func (data *InputData) ParseConflict(fields []string) error {
+func (data *InputData) ParseConflict(fields []string, ignore map[string]struct{}) error {
 	if len(fields) < 4 {
 		log.Printf("expected %q", "conflict: badness course1 course2 ...")
 		return fmt.Errorf("parsing error")
@@ -500,6 +516,10 @@ func (data *InputData) ParseConflict(fields []string) error {
 	var courses []*Course
 	repeat := make(map[*Course]bool)
 	for _, tag := range fields[2:] {
+		if _, present := ignore[tag]; present {
+			continue
+		}
+
 		found := false
 		for _, instructor := range data.Instructors {
 			for _, course := range instructor.Courses {
@@ -531,6 +551,19 @@ func (data *InputData) ParseConflict(fields []string) error {
 	}
 
 	data.Conflicts = append(data.Conflicts, Conflict{Badness: badness, Courses: courses})
+
+	return nil
+}
+
+func (data *InputData) ParseIgnore(fields []string, ignore map[string]struct{}) error {
+	if len(fields) < 2 {
+		log.Printf("expected %q", "ignore: tag ...")
+		return fmt.Errorf("parsing error")
+	}
+
+	for _, rawTag := range fields[1:] {
+		ignore[rawTag] = struct{}{}
+	}
 
 	return nil
 }
