@@ -14,10 +14,11 @@ import (
 //
 
 type InputData struct {
-	Rooms       []*Room
-	Times       []*Time
-	Instructors []*Instructor
-	Conflicts   []Conflict
+	Rooms         []*Room
+	Times         []*Time
+	Instructors   []*Instructor
+	Conflicts     []Conflict
+	AntiConflicts []AntiConflict
 }
 
 type Room struct {
@@ -53,6 +54,11 @@ type Course struct {
 type Conflict struct {
 	Badness int
 	Courses []*Course
+}
+
+type AntiConflict struct {
+	Badness int
+	Courses []string
 }
 
 func (t *Time) Prefix() string {
@@ -161,6 +167,11 @@ func Parse(filename string, lines [][]string) (*InputData, error) {
 
 		case "conflict:":
 			if err = data.ParseConflict(fields, ignore); err != nil {
+				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
+			}
+
+		case "anticonflict:":
+			if err = data.ParseAntiConflict(fields, ignore); err != nil {
 				return nil, fmt.Errorf("%q line %d: %v", filename, linenumber+1, err)
 			}
 
@@ -551,6 +562,58 @@ func (data *InputData) ParseConflict(fields []string, ignore map[string]struct{}
 	}
 
 	data.Conflicts = append(data.Conflicts, Conflict{Badness: badness, Courses: courses})
+
+	return nil
+}
+
+func (data *InputData) ParseAntiConflict(fields []string, ignore map[string]struct{}) error {
+	if len(fields) < 4 {
+		log.Printf("expected %q", "anticonflict: badness course1 course2 ...")
+		return fmt.Errorf("parsing error")
+	}
+
+	badness, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return fmt.Errorf("error parsing badness value %q", fields[1])
+	}
+	if badness < -1 {
+		return fmt.Errorf("badness of an anticonflict cannot be less than -1")
+	}
+	if badness > 100 {
+		return fmt.Errorf("badness of an anticonflict cannot be greater than 100")
+	}
+	if badness == 100 {
+		badness = -1
+	}
+
+	var courses []string
+	repeat := make(map[string]bool)
+NEXTFIELD:
+	for _, tag := range fields[2:] {
+		if _, present := ignore[tag]; present {
+			continue
+		}
+
+		found := false
+		for _, instructor := range data.Instructors {
+			for _, course := range instructor.Courses {
+				if course.Name == tag {
+					if repeat[tag] {
+						return fmt.Errorf("course %q repeated", tag)
+					}
+					repeat[tag] = true
+					found = true
+					courses = append(courses, tag)
+					continue NEXTFIELD
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("course %q not found in anticonflict: line", tag)
+		}
+	}
+
+	data.AntiConflicts = append(data.AntiConflicts, AntiConflict{Badness: badness, Courses: courses})
 
 	return nil
 }

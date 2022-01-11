@@ -20,6 +20,10 @@ type Problem struct {
 	Badness int
 }
 
+type CoursePair struct {
+	A, B string
+}
+
 func (s *Schedule) AddBadness(badness int) {
 	if badness >= 0 && badness < 100 {
 		s.Badness += badness
@@ -34,6 +38,24 @@ func (data *InputData) Score(placements []Placement) Schedule {
 	grid := data.MakeGrid(placements)
 	schedule := Schedule{Placements: placements, RoomTimes: grid}
 	var problems []Problem
+
+	// map pairs of courses that should be taught at the same time
+	// to the badness score for a miss, then check them off the list
+	// as we find them
+	anticonflicts := make(map[CoursePair]int)
+	for _, conflict := range data.AntiConflicts {
+		for _, a := range conflict.Courses {
+			for _, b := range conflict.Courses {
+				if a == b {
+					continue
+				}
+				if a > b {
+					a, b = b, a
+				}
+				anticonflicts[CoursePair{a, b}] = conflict.Badness
+			}
+		}
+	}
 
 	// check each time slot
 	for t := range data.Times {
@@ -117,8 +139,38 @@ func (data *InputData) Score(placements []Placement) Schedule {
 						problems = append(problems, Problem{Message: msg, Badness: badness})
 					}
 				}
+
+				// are we trying to schedule these two at the same time?
+				a, b := courseA.Name, courseB.Name
+				if a > b {
+					a, b = b, a
+				}
+				if _, present := anticonflicts[CoursePair{a, b}]; present {
+					// only consider it satisfied if they start at the same time
+					if !grid[roomA][t].IsSpillover && !grid[roomB][t].IsSpillover {
+						delete(anticonflicts, CoursePair{a, b})
+					}
+				}
+
+				// are these sections of the same course?
+				if courseA.Name == courseB.Name {
+					badness := 40
+					msg := fmt.Sprintf("curriculum conflict: %s has two sections meeting at %s (badness %d)",
+						courseA.Name, data.Times[t].Name, badness)
+					problems = append(problems, Problem{Message: msg, Badness: badness})
+				}
 			}
 		}
+	}
+
+	// apply penalties for anticonflicts that were not satisfied
+	for pair, badness := range anticonflicts {
+		if badness < 0 {
+			badness = Impossible
+		}
+		msg := fmt.Sprintf("curriculum conflict: %s and %s must have sections that meet at the same time (badness %d)",
+			pair.A, pair.B, badness)
+		problems = append(problems, Problem{Message: msg, Badness: badness})
 	}
 
 	// find what count as days (multiple time slots with the same prefix)
@@ -221,8 +273,8 @@ func (data *InputData) Score(placements []Placement) Schedule {
 
 			// penalize schedules that are too spread out or too clustered on a given day
 			for _, classes := range onDay {
-				// if there are an odd number of classes this day, it's okay to have a lone class
-				singletonOkay := len(classes)&1 == 1
+				// one singleton class per day is okay. if there are two, the 2nd will incur penalties
+				singletonOkay := true
 				i := 0
 				for i < len(classes) {
 					// find the beginning of the next cluster of classes (if any)
@@ -257,8 +309,8 @@ func (data *InputData) Score(placements []Placement) Schedule {
 							mismatch = -mismatch
 						}
 						if mismatch != 0 {
-							// 1 => 4, 3 => 4, 4 => 9, 5 => 16
-							badness += (mismatch + 1) * (mismatch + 1)
+							// 1 => 9, 3 => 9, 4 => 16, 5 => 81
+							badness += (mismatch + 2) * (mismatch + 2)
 						}
 					}
 				}
@@ -314,7 +366,7 @@ func (data *InputData) Score(placements []Placement) Schedule {
 
 		// having at least one section on each day is important
 		if mw == 0 || tr == 0 {
-			badness := 10
+			badness := 15
 			missing := "MW(F)"
 			if tr == 0 {
 				missing = "TR"
@@ -325,7 +377,7 @@ func (data *InputData) Score(placements []Placement) Schedule {
 		}
 
 		if am == 0 || pm == 0 {
-			badness := 5
+			badness := 10
 			missing := "morning"
 			if pm == 0 {
 				missing = "afternoon"
