@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"sort"
-	"strings"
 )
 
 // A Schedule is a two-dimensional view of the placed sections,
@@ -52,7 +51,11 @@ func (data *InputData) Score(placements []Placement) Schedule {
 				if a > b {
 					a, b = b, a
 				}
-				anticonflicts[CoursePair{a, b}] = conflict.Badness
+
+				// use the worst badness score in case of overlapping rules
+				if other, exists := anticonflicts[CoursePair{a, b}]; !exists || conflict.Badness > other {
+					anticonflicts[CoursePair{a, b}] = conflict.Badness
+				}
 			}
 		}
 	}
@@ -238,7 +241,7 @@ func (data *InputData) Score(placements []Placement) Schedule {
 			// add a penalty if there is more than one class difference between
 			// the most and fewest on a day
 			if gap := max - min; gap > 1 {
-				badness := gap * gap
+				badness := gap * gap * 4
 				msg := fmt.Sprintf("instructor convenience: %s has more classes on some days than others (badness %d)",
 					instructor.Name, badness)
 				problems = append(problems, Problem{Message: msg, Badness: badness})
@@ -333,20 +336,8 @@ func (data *InputData) Score(placements []Placement) Schedule {
 		// count up sections in MW vs TR and AM vs PM
 		mw, tr, am, pm := 0, 0, 0, 0
 		for _, placement := range placements {
-			t := data.Times[placement.Time]
-			prefix := strings.ToLower(t.Prefix())
-			if prefix == "mwf" {
-				prefix = "mw"
-			}
-			if prefix != "mw" && prefix != "tr" {
-				continue
-			}
-			brk := strings.IndexAny(t.Name, "0123456789")
-			if brk < 0 {
-				continue
-			}
-			hour := t.Name[brk:]
-			if len(hour) != 4 || hour > "1630" {
+			prefix, hour := data.Times[placement.Time].Split()
+			if prefix == "" || hour == "" {
 				continue
 			}
 			if hour < "1200" {
@@ -366,25 +357,76 @@ func (data *InputData) Score(placements []Placement) Schedule {
 
 		// having at least one section on each day is important
 		if mw == 0 || tr == 0 {
-			badness := 15
-			missing := "MW(F)"
-			if tr == 0 {
-				missing = "TR"
+			// does the input data allow both mw and tr sections?
+			mw_allowed, tr_allowed := false, false
+			for _, instructor := range data.Instructors {
+				for _, course := range instructor.Courses {
+					if course.Name != courseName {
+						continue
+					}
+					for time, badness := range course.Times {
+						if badness < 0 || badness >= 100 {
+							continue
+						}
+						prefix, hour := data.Times[time].Split()
+						if prefix == "" || hour == "" {
+							continue
+						}
+						if prefix == "mw" {
+							mw_allowed = true
+						} else if prefix == "tr" {
+							tr_allowed = true
+						}
+					}
+				}
 			}
-			msg := fmt.Sprintf("section distribution: %s has multiple sections but none on %s (badness %d)",
-				courseName, missing, badness)
-			problems = append(problems, Problem{Message: msg, Badness: badness})
+
+			if mw_allowed && tr_allowed {
+				badness := 15
+				missing := "MW(F)"
+				if tr == 0 {
+					missing = "TR"
+				}
+				msg := fmt.Sprintf("section distribution: %s has multiple sections but none on %s (badness %d)",
+					courseName, missing, badness)
+				problems = append(problems, Problem{Message: msg, Badness: badness})
+			}
 		}
 
 		if am == 0 || pm == 0 {
-			badness := 10
-			missing := "morning"
-			if pm == 0 {
-				missing = "afternoon"
+			am_allowed, pm_allowed := false, false
+			for _, instructor := range data.Instructors {
+				for _, course := range instructor.Courses {
+					if course.Name != courseName {
+						continue
+					}
+					for time, badness := range course.Times {
+						if badness < 0 || badness >= 100 {
+							continue
+						}
+						prefix, hour := data.Times[time].Split()
+						if prefix == "" || hour == "" {
+							continue
+						}
+						if hour < "1200" {
+							am_allowed = true
+						} else {
+							pm_allowed = true
+						}
+					}
+				}
 			}
-			msg := fmt.Sprintf("section distribution: %s has multiple sections but none in the %s (badness %d)",
-				courseName, missing, badness)
-			problems = append(problems, Problem{Message: msg, Badness: badness})
+
+			if am_allowed && pm_allowed {
+				badness := 10
+				missing := "morning"
+				if pm == 0 {
+					missing = "afternoon"
+				}
+				msg := fmt.Sprintf("section distribution: %s has multiple sections but none in the %s (badness %d)",
+					courseName, missing, badness)
+				problems = append(problems, Problem{Message: msg, Badness: badness})
+			}
 		}
 	}
 

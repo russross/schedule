@@ -75,6 +75,28 @@ func (t *Time) Prefix() string {
 	return t.Name[:brk]
 }
 
+// split the time into its prefix (either mw or tr) and hour
+// this should only be used for scoring purposes
+// returns empty strings if it doesn't find mw or tr or the time is evening
+func (t *Time) Split() (string, string) {
+	prefix := strings.ToLower(t.Prefix())
+	if prefix == "mwf" {
+		prefix = "mw"
+	}
+	if prefix != "mw" && prefix != "tr" {
+		return "", ""
+	}
+	brk := strings.IndexAny(t.Name, "0123456789")
+	if brk < 0 {
+		return "", ""
+	}
+	hour := t.Name[brk:]
+	if len(hour) != 4 || hour > "1630" {
+		return "", ""
+	}
+	return prefix, hour
+}
+
 // how many slots does this course
 // require if it starts at this time?
 func (c *Course) SlotsNeeded(t *Time) int {
